@@ -1,10 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -13,8 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"archive/tar"
-	"compress/gzip"
+
 	"github.com/ulikunitz/xz"
 )
 
@@ -28,20 +28,20 @@ type Dependency struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Source      string `json:"source"`
-	Type        string `json:"type,omitempty"`         
-	AssetSuffix string `json:"asset_suffix,omitempty"` 
-	Private     bool   `json:"private,omitempty"`      
-	Extract     bool   `json:"extract,omitempty"`      
+	Type        string `json:"type,omitempty"`
+	AssetSuffix string `json:"asset_suffix,omitempty"`
+	Private     bool   `json:"private,omitempty"`
+	Extract     bool   `json:"extract,omitempty"`
 }
 type LockDependency struct {
-	Name      string    `json:"name"`
-	Path      string    `json:"path"`
-	Source    string    `json:"source"`
-	Version   string    `json:"version"`
-	Hash      string    `json:"hash"`
-	Type      string    `json:"type"`
-	Private   bool      `json:"private,omitempty"`
-	Extract   bool      `json:"extract,omitempty"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Source  string `json:"source"`
+	Version string `json:"version"`
+	Hash    string `json:"hash"`
+	Type    string `json:"type"`
+	Private bool   `json:"private,omitempty"`
+	Extract bool   `json:"extract,omitempty"`
 }
 type GitHubRelease struct {
 	TagName string `json:"tag_name"`
@@ -58,12 +58,14 @@ const (
 	DepsFileName = "GLITCH_DEPS.json"
 	LockFileName = "GLITCH_DEPS-lock.json"
 )
+
 type PackageManager struct {
 	workDir     string
 	githubToken string
 	configPath  string
 	lockPath    string
 }
+
 func NewPackageManager(configPath string) *PackageManager {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -74,7 +76,7 @@ func NewPackageManager(configPath string) *PackageManager {
 		configPath = DepsFileName
 	}
 	lockPath := generateLockFileName(configPath)
-	
+
 	return &PackageManager{
 		workDir:     wd,
 		githubToken: githubToken,
@@ -89,7 +91,7 @@ func generateLockFileName(configPath string) string {
 }
 func (pm *PackageManager) loadDepsFile() (DepsFile, error) {
 	depsPath := filepath.Join(pm.workDir, pm.configPath)
-	data, err := ioutil.ReadFile(depsPath)
+	data, err := os.ReadFile(depsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -100,9 +102,9 @@ func (pm *PackageManager) loadDepsFile() (DepsFile, error) {
 }
 func (pm *PackageManager) loadLockFile() (LockFile, error) {
 	lockPath := filepath.Join(pm.workDir, pm.lockPath)
-	data, err := ioutil.ReadFile(lockPath)
+	data, err := os.ReadFile(lockPath)
 	if err != nil {
-		return make(LockFile), nil 
+		return make(LockFile), nil
 	}
 
 	var lock LockFile
@@ -118,7 +120,7 @@ func (pm *PackageManager) saveLockFile(lock LockFile) error {
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(lockPath, data, 0644)
+	return os.WriteFile(lockPath, data, 0644)
 }
 func (pm *PackageManager) extractRepoInfo(source string) (string, string, error) {
 	re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)(?:\.git)?`)
@@ -139,7 +141,7 @@ func (pm *PackageManager) createAuthenticatedRequest(method, url string) (*http.
 	if strings.Contains(url, "releases/download") {
 		req.Header.Set("Accept", "application/octet-stream")
 	}
-	
+
 	return req, nil
 }
 func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (*GitHubRelease, error) {
@@ -147,12 +149,12 @@ func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (
 	if isPrivate && pm.githubToken == "" {
 		return nil, fmt.Errorf("private repository %s/%s requires GLITCH_DEPS_GITHUB_PAT", owner, repo)
 	}
-	
+
 	req, err := pm.createAuthenticatedRequest("GET", url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -163,7 +165,7 @@ func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (
 	if resp.StatusCode == 404 {
 		return nil, fmt.Errorf("repository %s/%s not found or no access", owner, repo)
 	}
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
@@ -179,14 +181,14 @@ func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (
 func (pm *PackageManager) downloadAssetViaAPI(owner, repo string, assetID int, targetPath string, isPrivate bool) error {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/assets/%d", owner, repo, assetID)
 	fmt.Printf("Downloading via API: %s...\n", url)
-	
+
 	req, err := pm.createAuthenticatedRequest("GET", url)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/octet-stream")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -223,26 +225,26 @@ func (pm *PackageManager) downloadAssetViaAPI(owner, repo string, assetID int, t
 }
 func (pm *PackageManager) downloadBinary(url, targetPath string, isPrivate bool) error {
 	fmt.Printf("Downloading %s...\n", url)
-	
+
 	var resp *http.Response
 	var err error
-	
+
 	if isPrivate {
 		if pm.githubToken == "" {
 			return fmt.Errorf("private repository requires GLITCH_DEPS_GITHUB_PAT")
 		}
-		
+
 		req, err := pm.createAuthenticatedRequest("GET", url)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %v", err)
 		}
-		
+
 		client := &http.Client{}
-		resp, err = client.Do(req)
+		resp, _ = client.Do(req)
 	} else {
 		resp, err = http.Get(url)
 	}
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to download file: %v", err)
 	}
@@ -286,7 +288,7 @@ func (pm *PackageManager) extractArchive(archivePath, targetDir string) error {
 	} else if strings.HasSuffix(archivePath, ".tar.xz") {
 		return pm.extractTarXz(archivePath, targetDir)
 	}
-	
+
 	return fmt.Errorf("unsupported archive format: %s", archivePath)
 }
 func (pm *PackageManager) extractTarGz(archivePath, targetDir string) error {
@@ -295,15 +297,15 @@ func (pm *PackageManager) extractTarGz(archivePath, targetDir string) error {
 		return fmt.Errorf("failed to open archive: %v", err)
 	}
 	defer file.Close()
-	
+
 	gzReader, err := gzip.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %v", err)
 	}
 	defer gzReader.Close()
-	
+
 	tarReader := tar.NewReader(gzReader)
-	
+
 	return pm.extractTarReader(tarReader, targetDir)
 }
 func (pm *PackageManager) extractTarXz(archivePath, targetDir string) error {
@@ -312,14 +314,14 @@ func (pm *PackageManager) extractTarXz(archivePath, targetDir string) error {
 		return fmt.Errorf("failed to open archive: %v", err)
 	}
 	defer file.Close()
-	
+
 	xzReader, err := xz.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("failed to create xz reader: %v", err)
 	}
-	
+
 	tarReader := tar.NewReader(xzReader)
-	
+
 	return pm.extractTarReader(tarReader, targetDir)
 }
 func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir string) error {
@@ -331,12 +333,12 @@ func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir stri
 		if err != nil {
 			return fmt.Errorf("failed to read tar header: %v", err)
 		}
-		
+
 		targetPath := filepath.Join(targetDir, header.Name)
 		if !strings.HasPrefix(targetPath, filepath.Clean(targetDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid file path: %s", header.Name)
 		}
-		
+
 		switch header.Typeflag {
 		case tar.TypeDir:
 			err = os.MkdirAll(targetPath, os.FileMode(header.Mode))
@@ -348,12 +350,12 @@ func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir stri
 			if err != nil {
 				return fmt.Errorf("failed to create parent directory for %s: %v", targetPath, err)
 			}
-			
+
 			file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, os.FileMode(header.Mode))
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %v", targetPath, err)
 			}
-			
+
 			_, err = io.Copy(file, tarReader)
 			file.Close()
 			if err != nil {
@@ -361,7 +363,7 @@ func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir stri
 			}
 		}
 	}
-	
+
 	return nil
 }
 func (pm *PackageManager) buildAuthenticatedGitURL(source string, isPrivate bool) string {
@@ -371,12 +373,12 @@ func (pm *PackageManager) buildAuthenticatedGitURL(source string, isPrivate bool
 	if strings.HasPrefix(source, "https://github.com/") {
 		return strings.Replace(source, "https://github.com/", "https://"+pm.githubToken+"@github.com/", 1)
 	}
-	
+
 	return source
 }
 func (pm *PackageManager) getLatestCommitHash(source string, isPrivate bool) (string, error) {
 	gitURL := pm.buildAuthenticatedGitURL(source, isPrivate)
-	
+
 	cmd := exec.Command("git", "ls-remote", gitURL, "HEAD")
 	output, err := cmd.Output()
 	if err != nil {
@@ -390,14 +392,14 @@ func (pm *PackageManager) getLatestCommitHash(source string, isPrivate bool) (st
 	if len(lines) > 0 && len(lines[0]) > 0 {
 		parts := strings.Fields(lines[0])
 		if len(parts) > 0 {
-			return parts[0][:8], nil 
+			return parts[0][:8], nil
 		}
 	}
 	return "", fmt.Errorf("failed to parse git ls-remote output")
 }
 func (pm *PackageManager) cloneOrUpdateRepo(source, targetPath string, isPrivate bool) error {
 	gitURL := pm.buildAuthenticatedGitURL(source, isPrivate)
-	
+
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 		fmt.Printf("Cloning %s to %s...\n", source, targetPath)
 		cmd := exec.Command("git", "clone", gitURL, targetPath)
@@ -426,8 +428,6 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		depType = pm.determineDependencyType(dep.Name)
 	}
 
-	targetPath := filepath.Join(pm.workDir, dep.Path)
-
 	if depType == "binary" {
 		owner, repo, err := pm.extractRepoInfo(dep.Source)
 		if err != nil {
@@ -438,19 +438,26 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to get release info: %v", err)
 		}
+
+		expandedPath := pm.expandPath(dep.Path, release.TagName)
+		fmt.Printf("Original path: %s\n", dep.Path)
+		fmt.Printf("Expanded path: %s\n", expandedPath)
+
+		targetPath := filepath.Join(pm.workDir, expandedPath)
+
 		fmt.Printf("Available assets in release %s:\n", release.TagName)
 		for i, asset := range release.Assets {
 			fmt.Printf("  [%d] %s -> %s\n", i, asset.Name, asset.BrowserDownloadURL)
 		}
 		assetSuffix := pm.getAssetSuffixFromDep(dep)
-		
+
 		var downloadURL string
 		var assetID int
 		var assetName string
-		
+
 		if assetSuffix != "" {
 			var found bool
-			
+
 			for _, asset := range release.Assets {
 				if strings.Contains(asset.Name, assetSuffix) {
 					downloadURL = asset.BrowserDownloadURL
@@ -461,7 +468,7 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 					break
 				}
 			}
-			
+
 			if !found {
 				return LockDependency{}, fmt.Errorf("no suitable asset found for %s in release %s", assetSuffix, release.TagName)
 			}
@@ -497,19 +504,19 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		if dep.Extract {
 			if strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") {
 				var extractDir string
-				
-				if strings.HasSuffix(dep.Path, "/") {
-					extractDir = filepath.Join(pm.workDir, dep.Path)
-					
+
+				if strings.HasSuffix(expandedPath, "/") {
+					extractDir = filepath.Join(pm.workDir, expandedPath)
+
 					err = pm.extractArchive(actualTargetPath, extractDir)
 					if err != nil {
 						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
 					}
-					
+
 					fmt.Printf("Extracted archive to directory: %s\n", extractDir)
 				} else {
 					tmpExtractDir := filepath.Join(pm.workDir, "tmp", "extract_"+dep.Name)
-					
+
 					err = pm.extractArchive(actualTargetPath, tmpExtractDir)
 					if err != nil {
 						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
@@ -524,15 +531,15 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 							extractedFiles = append(extractedFiles, file)
 						}
 					}
-					
-					finalDir := filepath.Dir(filepath.Join(pm.workDir, dep.Path))
+
+					finalDir := filepath.Dir(filepath.Join(pm.workDir, expandedPath))
 					err = os.MkdirAll(finalDir, 0755)
 					if err != nil {
 						return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
 					}
-					
+
 					if len(extractedFiles) == 1 {
-						finalPath := filepath.Join(pm.workDir, dep.Path)
+						finalPath := filepath.Join(pm.workDir, expandedPath)
 						err = os.Rename(extractedFiles[0], finalPath)
 						if err != nil {
 							return LockDependency{}, fmt.Errorf("failed to move extracted file: %v", err)
@@ -561,38 +568,45 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		}
 
 		lockDep := LockDependency{
-			Name:      dep.Name,
-			Path:      dep.Path,
-			Source:    dep.Source,
-			Version:   release.TagName,
-			Hash:      release.TagName,
-			Type:      "binary",
-			Private:   dep.Private,
-			Extract:   dep.Extract,
+			Name:    dep.Name,
+			Path:    expandedPath,
+			Source:  dep.Source,
+			Version: release.TagName,
+			Hash:    release.TagName,
+			Type:    "binary",
+			Private: dep.Private,
+			Extract: dep.Extract,
 		}
 
 		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, release.TagName)
 		return lockDep, nil
 
 	} else {
-		err := pm.cloneOrUpdateRepo(dep.Source, targetPath, dep.Private)
-		if err != nil {
-			return LockDependency{}, fmt.Errorf("failed to install %s: %v", dep.Name, err)
-		}
 		hash, err := pm.getLatestCommitHash(dep.Source, dep.Private)
 		if err != nil {
 			hash = "unknown"
 		}
 
+		expandedPath := pm.expandPath(dep.Path, hash)
+		fmt.Printf("Original path: %s\n", dep.Path)
+		fmt.Printf("Expanded path: %s\n", expandedPath)
+
+		targetPath := filepath.Join(pm.workDir, expandedPath)
+
+		err = pm.cloneOrUpdateRepo(dep.Source, targetPath, dep.Private)
+		if err != nil {
+			return LockDependency{}, fmt.Errorf("failed to install %s: %v", dep.Name, err)
+		}
+
 		lockDep := LockDependency{
-			Name:      dep.Name,
-			Path:      dep.Path,
-			Source:    dep.Source,
-			Version:   hash,
-			Hash:      hash,
-			Type:      "repository",
-			Private:   dep.Private,
-			Extract:   dep.Extract,
+			Name:    dep.Name,
+			Path:    expandedPath,
+			Source:  dep.Source,
+			Version: hash,
+			Hash:    hash,
+			Type:    "repository",
+			Private: dep.Private,
+			Extract: dep.Extract,
 		}
 
 		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, hash)
@@ -689,25 +703,25 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 }
 func (pm *PackageManager) SelfUpdate() error {
 	fmt.Println("🔄 Checking for glitch_deps updates...")
-	
+
 	const repoOwner = "glitch-vpn"
 	const repoName = "glitch-deps"
 	release, err := pm.getLatestRelease(repoOwner, repoName, false)
 	if err != nil {
 		return fmt.Errorf("failed to get latest release: %v", err)
 	}
-	
+
 	fmt.Printf("Latest version: %s\n", release.TagName)
 
 	currentOS := runtime.GOOS
 	currentArch := runtime.GOARCH
-	
+
 	fmt.Printf("Current platform: %s/%s\n", currentOS, currentArch)
 	fmt.Printf("Available assets:\n")
 	for i, asset := range release.Assets {
 		fmt.Printf("  [%d] %s\n", i, asset.Name)
 	}
-	
+
 	var downloadURL string
 	var assetName string
 	bestMatch := pm.findBestAssetMatch(release.Assets, currentOS, currentArch)
@@ -716,30 +730,30 @@ func (pm *PackageManager) SelfUpdate() error {
 		assetName = bestMatch.Name
 		fmt.Printf("Selected asset: %s\n", assetName)
 	}
-	
+
 	if downloadURL == "" {
 		return fmt.Errorf("no suitable binary found for %s/%s", currentOS, currentArch)
 	}
-	
+
 	fmt.Printf("Downloading %s...\n", assetName)
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %v", err)
 	}
-	
+
 	tmpDir := filepath.Join(filepath.Dir(execPath), "tmp_update")
 	err = os.MkdirAll(tmpDir, 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %v", err)
 	}
 	defer os.RemoveAll(tmpDir) // Clean up temp directory
-	
+
 	downloadPath := filepath.Join(tmpDir, assetName)
 	err = pm.downloadBinary(downloadURL, downloadPath, false)
 	if err != nil {
 		return fmt.Errorf("failed to download update: %v", err)
 	}
-	
+
 	var newBinaryPath string
 
 	if strings.HasSuffix(assetName, ".tar.gz") {
@@ -753,7 +767,7 @@ func (pm *PackageManager) SelfUpdate() error {
 		if err != nil {
 			return fmt.Errorf("failed to list extracted files: %v", err)
 		}
-		
+
 		for _, file := range files {
 			if info, err := os.Stat(file); err == nil && !info.IsDir() {
 				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "glitch_deps") {
@@ -762,7 +776,7 @@ func (pm *PackageManager) SelfUpdate() error {
 				}
 			}
 		}
-		
+
 		if newBinaryPath == "" {
 			return fmt.Errorf("no executable binary found in archive")
 		}
@@ -771,12 +785,12 @@ func (pm *PackageManager) SelfUpdate() error {
 	} else {
 		newBinaryPath = downloadPath
 	}
-	
+
 	err = os.Chmod(newBinaryPath, 0755)
 	if err != nil {
 		return fmt.Errorf("failed to set executable permissions: %v", err)
 	}
-	
+
 	fmt.Println("Testing new binary...")
 	cmd := exec.Command(newBinaryPath, "version")
 	output, err := cmd.Output()
@@ -784,19 +798,19 @@ func (pm *PackageManager) SelfUpdate() error {
 		return fmt.Errorf("new binary failed to run: %v", err)
 	}
 	fmt.Printf("New binary version output:\n%s", output)
-	
+
 	tempExecPath := execPath + ".tmp"
 	err = os.Rename(newBinaryPath, tempExecPath)
 	if err != nil {
 		return fmt.Errorf("failed to move new binary: %v", err)
 	}
-	
+
 	err = os.Rename(tempExecPath, execPath)
 	if err != nil {
 		os.Remove(tempExecPath)
 		return fmt.Errorf("failed to replace binary: %v", err)
 	}
-	
+
 	fmt.Printf("✅ Successfully updated to %s\n", release.TagName)
 	return nil
 }
@@ -815,14 +829,14 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 		fmt.Sprintf("%s-%s", targetOS, targetArch),
 		fmt.Sprintf("%s.%s", targetOS, targetArch),
 	}
-	
+
 	if targetOS == "darwin" {
 		patterns = append(patterns, fmt.Sprintf("macos_%s", targetArch))
 		patterns = append(patterns, fmt.Sprintf("macos-%s", targetArch))
 		patterns = append(patterns, fmt.Sprintf("mac_%s", targetArch))
 		patterns = append(patterns, fmt.Sprintf("mac-%s", targetArch))
 	}
-	
+
 	if targetOS == "windows" {
 		patterns = append(patterns, fmt.Sprintf("win_%s", targetArch))
 		patterns = append(patterns, fmt.Sprintf("win-%s", targetArch))
@@ -833,13 +847,13 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 			patterns[i] = pattern + ".exe"
 		}
 	}
-	
+
 	archAliases := map[string][]string{
 		"amd64": {"x86_64", "x64"},
 		"arm64": {"aarch64"},
 		"386":   {"i386", "x86"},
 	}
-	
+
 	if aliases, exists := archAliases[targetArch]; exists {
 		for _, alias := range aliases {
 			patterns = append(patterns, fmt.Sprintf("%s_%s", targetOS, alias))
@@ -850,7 +864,7 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 			}
 		}
 	}
-	
+
 	for _, pattern := range patterns {
 		for i := range assets {
 			assetName := strings.ToLower(assets[i].Name)
@@ -860,12 +874,12 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 			}
 		}
 	}
-	
+
 	for i := range assets {
 		assetName := strings.ToLower(assets[i].Name)
 		containsOS := strings.Contains(assetName, targetOS)
 		containsArch := strings.Contains(assetName, targetArch)
-		
+
 		if !containsArch {
 			if aliases, exists := archAliases[targetArch]; exists {
 				for _, alias := range aliases {
@@ -876,20 +890,20 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 				}
 			}
 		}
-		
+
 		if !containsOS && targetOS == "darwin" {
 			containsOS = strings.Contains(assetName, "macos") || strings.Contains(assetName, "mac")
 		}
 		if !containsOS && targetOS == "windows" {
 			containsOS = strings.Contains(assetName, "win") || strings.Contains(assetName, "win32")
 		}
-		
+
 		if containsOS && containsArch {
 			fmt.Printf("Found fallback match: %s (contains %s and %s)\n", assets[i].Name, targetOS, targetArch)
 			return &assets[i]
 		}
 	}
-	
+
 	return nil
 }
 func printUsage() {
@@ -919,23 +933,43 @@ func printVersion() {
 func parseFlags(args []string) (string, []string) {
 	var configPath string
 	var remainingArgs []string
-	
+
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-c" && i+1 < len(args) {
 			configPath = args[i+1]
-			i++ 
+			i++
 		} else {
 			remainingArgs = append(remainingArgs, args[i])
 		}
 	}
-	
+
 	return configPath, remainingArgs
 }
-func getDefaultPlatform() string {
-	return fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
-}
+
 func (pm *PackageManager) getAssetSuffixFromDep(dep Dependency) string {
 	return dep.AssetSuffix
+}
+
+func (pm *PackageManager) expandPath(path, version string) string {
+	expanded := path
+
+	if strings.Contains(expanded, "@VERSION") {
+		expanded = strings.ReplaceAll(expanded, "@VERSION", version)
+	}
+
+	envVarPattern := regexp.MustCompile(`\$([A-Z_][A-Z0-9_]*)`)
+	matches := envVarPattern.FindAllStringSubmatch(expanded, -1)
+
+	for _, match := range matches {
+		if len(match) >= 2 {
+			envVarName := match[1]
+			envVarValue := os.Getenv(envVarName)
+			placeholder := "$" + envVarName
+			expanded = strings.ReplaceAll(expanded, placeholder, envVarValue)
+		}
+	}
+
+	return expanded
 }
 
 func main() {
@@ -944,7 +978,7 @@ func main() {
 		return
 	}
 	configPath, args := parseFlags(os.Args[1:])
-	
+
 	if len(args) < 1 {
 		printUsage()
 		return

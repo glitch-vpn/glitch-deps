@@ -12,6 +12,7 @@ A lightweight package manager for managing Git repository dependencies and GitHu
   - [Asset Suffix Specification](#asset-suffix-specification)
   - [Archive Extraction](#archive-extraction)
   - [Private Repositories](#private-repositories)
+  - [Path Variables](#path-variables)
 - [Commands](#commands)
 - [Use Cases](#use-cases)
   - [Multi-Environment Setup](#multi-environment-setup)
@@ -65,6 +66,63 @@ go build -o glitch_deps main.go
 ```
 
 ## Configuration
+
+### Path Variables
+
+You can use dynamic variables in dependency paths to create version-specific or environment-specific installations:
+
+**Supported variables:**
+- `@VERSION` - Replaced with the actual release version/tag (for binaries) or commit hash (for repositories)
+- `$ENV_VAR` - Replaced with environment variable values
+
+**Examples:**
+
+```json
+{
+  "shadowsocks": {
+    "name": "shadowsocks",
+    "path": "bin/ss/@VERSION/$DEPLOYMENT_ENV/",
+    "source": "https://github.com/shadowsocks/shadowsocks-rust.git",
+    "type": "binary",
+    "asset_suffix": "aarch64-unknown-linux-gnu",
+    "extract": true
+  },
+  "terraform": {
+    "name": "terraform",
+    "path": "tools/terraform-@VERSION",
+    "source": "https://github.com/hashicorp/terraform.git",
+    "type": "binary",
+    "asset_suffix": "linux_amd64"
+  },
+  "my_library": {
+    "name": "my_library",
+    "path": "libs/$PROJECT_NAME/@VERSION/",
+    "source": "https://github.com/owner/library.git",
+    "type": "repository"
+  }
+}
+```
+
+**Usage with environment variables:**
+```bash
+# Set environment variables
+export DEPLOYMENT_ENV=production
+export PROJECT_NAME=myapp
+
+# Install dependencies - paths will be expanded automatically
+./glitch_deps install
+
+# Results in paths like:
+# bin/ss/v1.15.3/production/
+# tools/terraform-v1.6.0
+# libs/myapp/a1b2c3d4/
+```
+
+**Benefits:**
+- **Version isolation**: Keep multiple versions side by side
+- **Environment separation**: Different paths for dev/staging/production
+- **Dynamic organization**: Organize dependencies based on runtime context
+- **Lock file tracking**: Expanded paths are stored in lock files for consistency
 
 ### Custom Config Files
 
