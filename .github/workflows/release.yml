@@ -41,6 +41,8 @@ jobs:
         if [ "$GOOS" = "windows" ]; then
           BINARY_NAME="${BINARY_NAME}.exe"
         fi
+
+        go mod tidy
         
         go build -ldflags="-s -w" -o ${BINARY_NAME} main.go
         
