@@ -187,7 +187,7 @@ For binary dependencies that are distributed as archives, you can enable automat
     "type": "binary",
     "asset_suffix": "linux_amd64",
     "extract": true,
-    "name": "my-tool"
+    "filename": "my-tool"
   }
 }
 ```
@@ -197,11 +197,67 @@ For binary dependencies that are distributed as archives, you can enable automat
 - `.tar.xz` - XZ compressed tar archives
 - `.zip` - ZIP archives
 
+**Asset Selection Logic**:
+
+The tool now uses a strict three-stage filtering process to select the correct asset:
+
+1. **First stage - `asset_name` filtering** (optional):
+   ```json
+   {
+     "asset_name": "ubuntu-22.04"
+   }
+   ```
+   - If specified, only assets containing this string in their name are considered
+   - If no assets match, returns an error
+
+2. **Second stage - `asset_extension` filtering** (optional):
+   ```json
+   {
+     "asset_extension": "tar.gz"
+   }
+   ```
+   - If specified, only assets ending with this file extension are considered
+   - Automatically adds leading dot if not provided (e.g., `tar.gz` becomes `.tar.gz`)
+   - Must match at the end of the filename (not anywhere in the middle)
+   - If no assets match, returns an error
+
+3. **Third stage - `asset_suffix` filtering** (required):
+   ```json
+   {
+     "asset_suffix": "linux_amd64"
+   }
+   ```
+   - **Required for all binary dependencies**
+   - Filters remaining assets by this suffix
+   - If multiple assets match, returns an error with the list of matching assets
+   - If no assets match, returns an error
+
+**Examples of precise asset selection**:
+```json
+{
+  "precise_tool": {
+    "path": "bin/tool",
+    "source": "https://github.com/owner/tool.git",
+    "type": "binary",
+    "asset_name": "ubuntu-22.04",
+    "asset_extension": "tar.gz",
+    "asset_suffix": "x86_64"
+  }
+}
+```
+
+This will:
+1. Find all assets containing "ubuntu-22.04" in the name
+2. Among those, find assets with ".tar.gz" extension
+3. Among those, find assets containing "x86_64"
+4. If exactly one asset matches all criteria, download it
+5. If zero or multiple assets match, return an error
+
 **Extraction Logic**:
 
-When `extract` is set to `true`, the behavior depends on the `name` field:
+When `extract` is set to `true`, the behavior depends on the `filename` field:
 
-1. **Without `name` field** - Extract all files to directory:
+1. **Without `filename` field** - Extract all files to directory:
    ```json
    {
      "path": "bin/shadowsocks",
@@ -211,22 +267,25 @@ When `extract` is set to `true`, the behavior depends on the `name` field:
    - All files from the archive are extracted to the `path` directory
    - Directory structure is preserved
 
-2. **With `name` field** - Extract single file with specific name:
+2. **With `filename` field** - Extract single file with specific name:
    ```json
    {
      "path": "bin",
      "extract": true,
-     "name": "my-tool"
+     "filename": "my-tool"
    }
    ```
    - Archive **must contain exactly 1 file**
-   - The single file is extracted and renamed to `name`
-   - Final path becomes `path/name` (e.g., `bin/my-tool`)
+   - The single file is extracted and renamed to `filename`
+   - Final path becomes `path/filename` (e.g., `bin/my-tool`)
 
 **Error Handling**:
-- If `name` is specified but archive contains multiple files → **Error with helpful message**
-- If `name` is specified but archive is empty → **Error**
-- If `name` is not specified → Extract all files regardless of count
+- If `filename` is specified but archive contains multiple files → **Error with helpful message**
+- If `filename` is specified but archive is empty → **Error**
+- If `filename` is not specified → Extract all files regardless of count
+- If no `asset_suffix` is specified → **Error** (no random asset downloads)
+- If multiple assets match the criteria → **Error with list of matching assets**
+- If no assets match `asset_name`, `asset_extension`, or `asset_suffix` → **Error with available options**
 
 **Examples**:
 ```json
@@ -235,16 +294,18 @@ When `extract` is set to `true`, the behavior depends on the `name` field:
     "path": "bin/amneziawg",
     "source": "https://github.com/amnezia-vpn/amneziawg-tools.git",
     "type": "binary",
-    "asset_suffix": "ubuntu-22.04",
+    "asset_name": "ubuntu-22.04",
+    "asset_extension": "tar.gz",
+    "asset_suffix": "amneziawg-tools",
     "extract": true
   },
-  "hypothetical_single_binary": {
+  "single_binary": {
     "path": "bin",
     "source": "https://github.com/owner/single-file-tool.git", 
     "type": "binary",
     "asset_suffix": "linux_amd64",
     "extract": true,
-    "name": "tool"
+    "filename": "tool"
   }
 }
 ```

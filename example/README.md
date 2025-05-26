@@ -18,7 +18,6 @@ chmod +x glitch_deps
 ├── GLITCH_DEPS.json
 ├── bin
 │   ├── glitch_deps
-│   │   └── glitch_deps
 │   └── ss
 │       ├── sslocal
 │       ├── ssmanager

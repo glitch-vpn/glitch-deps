@@ -26,13 +26,15 @@ var (
 )
 
 type Dependency struct {
-	Path        string `json:"path"`
-	Source      string `json:"source"`
-	Type        string `json:"type,omitempty"`
-	AssetSuffix string `json:"asset_suffix,omitempty"`
-	Private     bool   `json:"private,omitempty"`
-	Extract     bool   `json:"extract,omitempty"`
-	Name        string `json:"name,omitempty"`
+	Path           string `json:"path"`
+	Source         string `json:"source"`
+	Type           string `json:"type,omitempty"`
+	AssetSuffix    string `json:"asset_suffix,omitempty"`
+	Private        bool   `json:"private,omitempty"`
+	Extract        bool   `json:"extract,omitempty"`
+	Filename       string `json:"filename,omitempty"`
+	AssetName      string `json:"asset_name,omitempty"`
+	AssetExtension string `json:"asset_extension,omitempty"`
 }
 type LockDependency struct {
 	Name    string `json:"name"`
@@ -505,39 +507,105 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 		for i, asset := range release.Assets {
 			fmt.Printf("  [%d] %s -> %s\n", i, asset.Name, asset.BrowserDownloadURL)
 		}
-		assetSuffix := pm.getAssetSuffixFromDep(dep)
 
 		var downloadURL string
 		var assetID int
 		var assetName string
 
-		if assetSuffix != "" {
-			var found bool
+		// First filter by asset_name if specified
+		var candidateAssets []struct {
+			ID                 int    `json:"id"`
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		}
 
+		if dep.AssetName != "" {
+			fmt.Printf("Filtering assets by asset_name: %s\n", dep.AssetName)
 			for _, asset := range release.Assets {
-				if strings.Contains(asset.Name, assetSuffix) {
-					downloadURL = asset.BrowserDownloadURL
-					assetID = asset.ID
-					assetName = asset.Name
-					found = true
-					fmt.Printf("Found matching asset: %s\n", asset.Name)
-					break
+				if strings.Contains(asset.Name, dep.AssetName) {
+					candidateAssets = append(candidateAssets, asset)
+				}
+			}
+			if len(candidateAssets) == 0 {
+				return LockDependency{}, fmt.Errorf("no assets found containing asset_name '%s' in release %s", dep.AssetName, release.TagName)
+			}
+			fmt.Printf("Found %d assets matching asset_name '%s'\n", len(candidateAssets), dep.AssetName)
+		} else {
+			candidateAssets = release.Assets
+		}
+
+		// Second filter by asset_extension if specified
+		if dep.AssetExtension != "" {
+			fmt.Printf("Filtering assets by asset_extension: %s\n", dep.AssetExtension)
+			var extensionFilteredAssets []struct {
+				ID                 int    `json:"id"`
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
+			}
+
+			// Ensure extension starts with dot
+			extension := dep.AssetExtension
+			if !strings.HasPrefix(extension, ".") {
+				extension = "." + extension
+			}
+
+			for _, asset := range candidateAssets {
+				if strings.HasSuffix(asset.Name, extension) {
+					extensionFilteredAssets = append(extensionFilteredAssets, asset)
 				}
 			}
 
-			if !found {
-				return LockDependency{}, fmt.Errorf("no suitable asset found for %s in release %s", assetSuffix, release.TagName)
+			if len(extensionFilteredAssets) == 0 {
+				return LockDependency{}, fmt.Errorf("no assets found with asset_extension '%s' in release %s", dep.AssetExtension, release.TagName)
 			}
-		} else {
-			if len(release.Assets) == 0 {
-				return LockDependency{}, fmt.Errorf("no assets found in release %s", release.TagName)
+
+			candidateAssets = extensionFilteredAssets
+			fmt.Printf("Found %d assets matching asset_extension '%s'\n", len(candidateAssets), dep.AssetExtension)
+		}
+
+		// Third filter by asset_suffix if specified
+		assetSuffix := pm.getAssetSuffixFromDep(dep)
+		if assetSuffix != "" {
+			var matchingAssets []struct {
+				ID                 int    `json:"id"`
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
 			}
-			asset := release.Assets[0]
+
+			for _, asset := range candidateAssets {
+				if strings.Contains(asset.Name, assetSuffix) {
+					matchingAssets = append(matchingAssets, asset)
+				}
+			}
+
+			if len(matchingAssets) == 0 {
+				return LockDependency{}, fmt.Errorf("no assets found matching asset_suffix '%s' in release %s", assetSuffix, release.TagName)
+			}
+
+			if len(matchingAssets) > 1 {
+				var assetNames []string
+				for _, asset := range matchingAssets {
+					assetNames = append(assetNames, asset.Name)
+				}
+				return LockDependency{}, fmt.Errorf("multiple assets found matching criteria. Found %d assets: %v. Please refine asset_name, asset_extension, or asset_suffix to match exactly one asset", len(matchingAssets), assetNames)
+			}
+
+			asset := matchingAssets[0]
 			downloadURL = asset.BrowserDownloadURL
 			assetID = asset.ID
 			assetName = asset.Name
-			fmt.Printf("No asset_suffix specified, using first available asset: %s\n", asset.Name)
+			fmt.Printf("Found matching asset: %s\n", asset.Name)
+		} else {
+			// No asset_suffix specified - this should be an error now
+			return LockDependency{}, fmt.Errorf("asset_suffix is required for binary dependencies. Available assets: %v", func() []string {
+				var names []string
+				for _, asset := range candidateAssets {
+					names = append(names, asset.Name)
+				}
+				return names
+			}())
 		}
+
 		var actualTargetPath string
 		if dep.Extract && (strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") || strings.HasSuffix(assetName, ".zip")) {
 			tmpDir := filepath.Join(pm.workDir, "tmp")
@@ -547,7 +615,8 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			}
 			actualTargetPath = filepath.Join(tmpDir, assetName)
 		} else {
-			actualTargetPath = targetPath
+			// targetPath is ALWAYS a directory, so append asset name
+			actualTargetPath = filepath.Join(targetPath, assetName)
 		}
 		if dep.Private {
 			err = pm.downloadAssetViaAPI(owner, repo, assetID, actualTargetPath, dep.Private)
@@ -582,9 +651,9 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 
 				fmt.Printf("Found %d files in archive\n", len(extractedFiles))
 
-				if dep.Name != "" {
+				if dep.Filename != "" {
 					if len(extractedFiles) > 1 {
-						return LockDependency{}, fmt.Errorf("name specified but archive contains %d files (expected 1). Remove name to extract all files to directory", len(extractedFiles))
+						return LockDependency{}, fmt.Errorf("filename specified but archive contains %d files (expected 1). Remove filename to extract all files to directory", len(extractedFiles))
 					}
 					if len(extractedFiles) == 0 {
 						return LockDependency{}, fmt.Errorf("no files found in archive")
@@ -596,7 +665,7 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 						return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
 					}
 
-					finalPath := filepath.Join(targetDir, dep.Name)
+					finalPath := filepath.Join(targetDir, dep.Filename)
 					err = os.Rename(extractedFiles[0], finalPath)
 					if err != nil {
 						return LockDependency{}, fmt.Errorf("failed to move extracted file: %v", err)

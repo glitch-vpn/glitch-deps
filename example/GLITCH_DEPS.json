@@ -1,18 +1,18 @@
 {
   "glitch_deps": {
     "name": "glitch_deps",
-    "path": "bin/glitch_deps/",
+    "path": "bin",
     "source": "https://github.com/glitch-vpn/glitch-deps.git",
     "type": "binary",
     "asset_suffix": "linux_amd64",
     "extract": true
   },
   "ss": {
-    "name": "ss",
-    "path": "bin/ss/",
+    "path": "bin/ss",
     "source": "https://github.com/shadowsocks/shadowsocks-rust.git",
     "type": "binary",
     "asset_suffix": "aarch64-unknown-linux-gnu",
+    "asset_extension": "tar.xz",
     "extract": true
   }
 }
