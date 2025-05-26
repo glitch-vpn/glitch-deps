@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Get version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        BINARY_NAME=glitch_deps
+        if [ "$GOOS" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+        
+        go build -ldflags="-s -w" -o ${BINARY_NAME} main.go
+        
+        if [ "$GOOS" = "windows" ]; then
+          zip glitch_deps_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.zip ${BINARY_NAME}
+        else
+          tar -czf glitch_deps_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.tar.gz ${BINARY_NAME}
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: glitch_deps_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}
+        path: glitch_deps_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Get version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          glitch_deps_${{ steps.version.outputs.VERSION }}_*/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
