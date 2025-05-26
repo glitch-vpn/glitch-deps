@@ -17,6 +17,13 @@ import (
 	"compress/gzip"
 	"github.com/ulikunitz/xz"
 )
+
+var (
+	Version   = "dev"
+	GitCommit = "unknown"
+	BuildDate = "unknown"
+)
+
 type Dependency struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`
@@ -740,6 +747,7 @@ func printUsage() {
 	fmt.Println("  glitch_deps update <dependency> [-c config.json] - update specific dependency")
 	fmt.Println("  glitch_deps update <dependency> <version> [-c config.json] - update to specific version")
 	fmt.Println("  glitch_deps self-update                    - update glitch_deps to latest version")
+	fmt.Println("  glitch_deps version                        - show version information")
 	fmt.Println("  glitch_deps help                           - show this help")
 	fmt.Println("")
 	fmt.Println("Flags:")
@@ -747,6 +755,13 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Environment variables:")
 	fmt.Println("  GLITCH_DEPS_GITHUB_PAT                     - GitHub Personal Access Token for private repositories")
+}
+func printVersion() {
+	fmt.Printf("glitch_deps version %s\n", Version)
+	fmt.Printf("Git commit: %s\n", GitCommit)
+	fmt.Printf("Build date: %s\n", BuildDate)
+	fmt.Printf("Go version: %s\n", runtime.Version())
+	fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 }
 func parseFlags(args []string) (string, []string) {
 	var configPath string
@@ -811,6 +826,9 @@ func main() {
 		if err != nil {
 			log.Fatal("Self-update error:", err)
 		}
+
+	case "version":
+		printVersion()
 
 	case "help":
 		printUsage()

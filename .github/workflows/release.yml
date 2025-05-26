@@ -44,7 +44,13 @@ jobs:
 
         go mod tidy
         
-        go build -ldflags="-s -w" -o ${BINARY_NAME} main.go
+        # Get build information
+        VERSION=${{ steps.version.outputs.VERSION }}
+        GIT_COMMIT=$(git rev-parse --short HEAD)
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Build with version information embedded
+        go build -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildDate=${BUILD_DATE}" -o ${BINARY_NAME} main.go
         
         if [ "$GOOS" = "windows" ]; then
           zip glitch_deps_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.zip ${BINARY_NAME}
