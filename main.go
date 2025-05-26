@@ -698,26 +698,27 @@ func (pm *PackageManager) SelfUpdate() error {
 	}
 	
 	fmt.Printf("Latest version: %s\n", release.TagName)
+
+	currentOS := runtime.GOOS
+	currentArch := runtime.GOARCH
+	
+	fmt.Printf("Current platform: %s/%s\n", currentOS, currentArch)
+	fmt.Printf("Available assets:\n")
+	for i, asset := range release.Assets {
+		fmt.Printf("  [%d] %s\n", i, asset.Name)
+	}
+	
 	var downloadURL string
 	var assetName string
-	platform := getDefaultPlatform()
-	platformParts := strings.Split(platform, "_")
-	if len(platformParts) != 2 {
-		return fmt.Errorf("invalid platform format: %s", platform)
-	}
-	goos, goarch := platformParts[0], platformParts[1]
-	
-	for _, asset := range release.Assets {
-		if strings.Contains(asset.Name, platform) || 
-		   (strings.Contains(asset.Name, goos) && strings.Contains(asset.Name, goarch)) {
-			downloadURL = asset.BrowserDownloadURL
-			assetName = asset.Name
-			break
-		}
+	bestMatch := pm.findBestAssetMatch(release.Assets, currentOS, currentArch)
+	if bestMatch != nil {
+		downloadURL = bestMatch.BrowserDownloadURL
+		assetName = bestMatch.Name
+		fmt.Printf("Selected asset: %s\n", assetName)
 	}
 	
 	if downloadURL == "" {
-		return fmt.Errorf("no suitable binary found for %s", platform)
+		return fmt.Errorf("no suitable binary found for %s/%s", currentOS, currentArch)
 	}
 	
 	fmt.Printf("Downloading %s...\n", assetName)
@@ -725,18 +726,170 @@ func (pm *PackageManager) SelfUpdate() error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %v", err)
 	}
-	tempPath := execPath + ".tmp"
-	err = pm.downloadBinary(downloadURL, tempPath, false)
+	
+	tmpDir := filepath.Join(filepath.Dir(execPath), "tmp_update")
+	err = os.MkdirAll(tmpDir, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tmpDir) // Clean up temp directory
+	
+	downloadPath := filepath.Join(tmpDir, assetName)
+	err = pm.downloadBinary(downloadURL, downloadPath, false)
 	if err != nil {
 		return fmt.Errorf("failed to download update: %v", err)
 	}
-	err = os.Rename(tempPath, execPath)
+	
+	var newBinaryPath string
+
+	if strings.HasSuffix(assetName, ".tar.gz") {
+		extractDir := filepath.Join(tmpDir, "extracted")
+		err = pm.extractArchive(downloadPath, extractDir)
+		if err != nil {
+			return fmt.Errorf("failed to extract archive: %v", err)
+		}
+
+		files, err := filepath.Glob(filepath.Join(extractDir, "*"))
+		if err != nil {
+			return fmt.Errorf("failed to list extracted files: %v", err)
+		}
+		
+		for _, file := range files {
+			if info, err := os.Stat(file); err == nil && !info.IsDir() {
+				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "glitch_deps") {
+					newBinaryPath = file
+					break
+				}
+			}
+		}
+		
+		if newBinaryPath == "" {
+			return fmt.Errorf("no executable binary found in archive")
+		}
+	} else if strings.HasSuffix(assetName, ".zip") {
+		return fmt.Errorf("ZIP archives not yet supported for self-update")
+	} else {
+		newBinaryPath = downloadPath
+	}
+	
+	err = os.Chmod(newBinaryPath, 0755)
 	if err != nil {
-		os.Remove(tempPath)
+		return fmt.Errorf("failed to set executable permissions: %v", err)
+	}
+	
+	fmt.Println("Testing new binary...")
+	cmd := exec.Command(newBinaryPath, "version")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("new binary failed to run: %v", err)
+	}
+	fmt.Printf("New binary version output:\n%s", output)
+	
+	tempExecPath := execPath + ".tmp"
+	err = os.Rename(newBinaryPath, tempExecPath)
+	if err != nil {
+		return fmt.Errorf("failed to move new binary: %v", err)
+	}
+	
+	err = os.Rename(tempExecPath, execPath)
+	if err != nil {
+		os.Remove(tempExecPath)
 		return fmt.Errorf("failed to replace binary: %v", err)
 	}
 	
 	fmt.Printf("✅ Successfully updated to %s\n", release.TagName)
+	return nil
+}
+
+func (pm *PackageManager) findBestAssetMatch(assets []struct {
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}, targetOS, targetArch string) *struct {
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+} {
+	patterns := []string{
+		fmt.Sprintf("%s_%s", targetOS, targetArch),
+		fmt.Sprintf("%s-%s", targetOS, targetArch),
+		fmt.Sprintf("%s.%s", targetOS, targetArch),
+	}
+	
+	if targetOS == "darwin" {
+		patterns = append(patterns, fmt.Sprintf("macos_%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("macos-%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("mac_%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("mac-%s", targetArch))
+	}
+	
+	if targetOS == "windows" {
+		patterns = append(patterns, fmt.Sprintf("win_%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("win-%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("win32_%s", targetArch))
+		patterns = append(patterns, fmt.Sprintf("win32-%s", targetArch))
+		for i, pattern := range patterns {
+			patterns = append(patterns, pattern+".exe")
+			patterns[i] = pattern + ".exe"
+		}
+	}
+	
+	archAliases := map[string][]string{
+		"amd64": {"x86_64", "x64"},
+		"arm64": {"aarch64"},
+		"386":   {"i386", "x86"},
+	}
+	
+	if aliases, exists := archAliases[targetArch]; exists {
+		for _, alias := range aliases {
+			patterns = append(patterns, fmt.Sprintf("%s_%s", targetOS, alias))
+			patterns = append(patterns, fmt.Sprintf("%s-%s", targetOS, alias))
+			if targetOS == "windows" {
+				patterns = append(patterns, fmt.Sprintf("%s_%s.exe", targetOS, alias))
+				patterns = append(patterns, fmt.Sprintf("%s-%s.exe", targetOS, alias))
+			}
+		}
+	}
+	
+	for _, pattern := range patterns {
+		for i := range assets {
+			assetName := strings.ToLower(assets[i].Name)
+			if strings.Contains(assetName, strings.ToLower(pattern)) {
+				fmt.Printf("Found exact match with pattern '%s': %s\n", pattern, assets[i].Name)
+				return &assets[i]
+			}
+		}
+	}
+	
+	for i := range assets {
+		assetName := strings.ToLower(assets[i].Name)
+		containsOS := strings.Contains(assetName, targetOS)
+		containsArch := strings.Contains(assetName, targetArch)
+		
+		if !containsArch {
+			if aliases, exists := archAliases[targetArch]; exists {
+				for _, alias := range aliases {
+					if strings.Contains(assetName, alias) {
+						containsArch = true
+						break
+					}
+				}
+			}
+		}
+		
+		if !containsOS && targetOS == "darwin" {
+			containsOS = strings.Contains(assetName, "macos") || strings.Contains(assetName, "mac")
+		}
+		if !containsOS && targetOS == "windows" {
+			containsOS = strings.Contains(assetName, "win") || strings.Contains(assetName, "win32")
+		}
+		
+		if containsOS && containsArch {
+			fmt.Printf("Found fallback match: %s (contains %s and %s)\n", assets[i].Name, targetOS, targetArch)
+			return &assets[i]
+		}
+	}
+	
 	return nil
 }
 func printUsage() {

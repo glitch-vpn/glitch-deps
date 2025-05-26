@@ -3,8 +3,8 @@
     "name": "glitch_deps",
     "path": "bin/glitch_deps/",
     "source": "https://github.com/glitch-vpn/glitch-deps.git",
-    "version": "v0.1.2",
-    "hash": "v0.1.2",
+    "version": "v0.1.5",
+    "hash": "v0.1.5",
     "type": "binary",
     "extract": true
   },

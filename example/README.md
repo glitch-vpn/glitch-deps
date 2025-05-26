@@ -1,10 +1,10 @@
 ## Run example
 
 ```bash
-curl -L https://github.com/glitch-vpn/glitch-deps/releases/download/v0.1.4/glitch_deps_v0.1.4_linux_amd64.tar.gz -o glitch_deps_v0.1.4_linux_amd64.tar.gz
+curl -L https://github.com/glitch-vpn/glitch-deps/releases/download/v0.1.6/glitch_deps_v0.1.6_linux_amd64.tar.gz -o glitch_deps_v0.1.6_linux_amd64.tar.gz
 
-tar -xzf glitch_deps_v0.1.4_linux_amd64.tar.gz
-rm glitch_deps_v0.1.4_linux_amd64.tar.gz
+tar -xzf glitch_deps_v0.1.6_linux_amd64.tar.gz
+rm glitch_deps_v0.1.6_linux_amd64.tar.gz
 
 chmod +x glitch_deps
 
