@@ -36,20 +36,17 @@ go build -o glitch_deps main.go
 ```json
 {
   "my_provider": {
-    "name": "my_provider",
     "path": "bin/my_provider",
     "source": "https://github.com/owner/repo.git",
     "type": "binary",
     "asset_suffix": "linux_amd64"
   },
   "my_library": {
-    "name": "my_library", 
     "path": "libs/my_library",
     "source": "https://github.com/owner/library.git",
     "type": "repository"
   },
   "private_tool": {
-    "name": "private_tool",
     "path": "tools/private_tool", 
     "source": "https://github.com/private-org/tool.git",
     "type": "binary",
@@ -80,7 +77,6 @@ You can use dynamic variables in dependency paths to create version-specific or 
 ```json
 {
   "shadowsocks": {
-    "name": "shadowsocks",
     "path": "bin/ss/@VERSION/$DEPLOYMENT_ENV/",
     "source": "https://github.com/shadowsocks/shadowsocks-rust.git",
     "type": "binary",
@@ -88,14 +84,12 @@ You can use dynamic variables in dependency paths to create version-specific or 
     "extract": true
   },
   "terraform": {
-    "name": "terraform",
     "path": "tools/terraform-@VERSION",
     "source": "https://github.com/hashicorp/terraform.git",
     "type": "binary",
     "asset_suffix": "linux_amd64"
   },
   "my_library": {
-    "name": "my_library",
     "path": "libs/$PROJECT_NAME/@VERSION/",
     "source": "https://github.com/owner/library.git",
     "type": "repository"
@@ -158,7 +152,6 @@ For binary dependencies, you can specify the target asset suffix using the `asse
 ```json
 {
   "cross_platform_tool": {
-    "name": "cross_platform_tool",
     "path": "bin/tool",
     "source": "https://github.com/owner/tool.git",
     "type": "binary",
@@ -181,13 +174,20 @@ For binary dependencies that are distributed as archives, you can enable automat
 
 ```json
 {
-  "shadowsocks": {
-    "name": "shadowsocks",
-    "path": "bin/ss/",
+  "shadowsocks_all": {
+    "path": "bin/shadowsocks",
     "source": "https://github.com/shadowsocks/shadowsocks-rust.git",
     "type": "binary",
     "asset_suffix": "aarch64-unknown-linux-gnu",
     "extract": true
+  },
+  "single_file_tool": {
+    "path": "bin",
+    "source": "https://github.com/owner/single-binary-release.git",
+    "type": "binary",
+    "asset_suffix": "linux_amd64",
+    "extract": true,
+    "name": "my-tool"
   }
 }
 ```
@@ -195,29 +195,66 @@ For binary dependencies that are distributed as archives, you can enable automat
 **Supported archive formats**:
 - `.tar.gz` - Gzip compressed tar archives
 - `.tar.xz` - XZ compressed tar archives
+- `.zip` - ZIP archives
 
-When `extract` is set to `true`:
-1. The archive is downloaded to a temporary directory (`./tmp`)
-2. The archive is extracted based on the `path` format:
-   - If `path` ends with `/` - all files are extracted to this directory
-   - If `path` doesn't end with `/` and archive contains one file - the file is renamed to the `path`
-   - If `path` doesn't end with `/` and archive contains multiple files - all files are extracted to the directory part of `path`
-3. The original archive file is removed after successful extraction
-4. Only our temporary files are cleaned up, user files in `./tmp` remain untouched
+**Extraction Logic**:
+
+When `extract` is set to `true`, the behavior depends on the `name` field:
+
+1. **Without `name` field** - Extract all files to directory:
+   ```json
+   {
+     "path": "bin/shadowsocks",
+     "extract": true
+   }
+   ```
+   - All files from the archive are extracted to the `path` directory
+   - Directory structure is preserved
+
+2. **With `name` field** - Extract single file with specific name:
+   ```json
+   {
+     "path": "bin",
+     "extract": true,
+     "name": "my-tool"
+   }
+   ```
+   - Archive **must contain exactly 1 file**
+   - The single file is extracted and renamed to `name`
+   - Final path becomes `path/name` (e.g., `bin/my-tool`)
+
+**Error Handling**:
+- If `name` is specified but archive contains multiple files → **Error with helpful message**
+- If `name` is specified but archive is empty → **Error**
+- If `name` is not specified → Extract all files regardless of count
 
 **Examples**:
 ```json
 {
-  "single_binary": {
-    "path": "bin/my-tool",
+  "amneziawg_tools": {
+    "path": "bin/amneziawg",
+    "source": "https://github.com/amnezia-vpn/amneziawg-tools.git",
+    "type": "binary",
+    "asset_suffix": "ubuntu-22.04",
     "extract": true
   },
-  "multiple_binaries": {
-    "path": "bin/shadowsocks/",
-    "extract": true
+  "hypothetical_single_binary": {
+    "path": "bin",
+    "source": "https://github.com/owner/single-file-tool.git", 
+    "type": "binary",
+    "asset_suffix": "linux_amd64",
+    "extract": true,
+    "name": "tool"
   }
 }
 ```
+
+**Process**:
+1. Archive is downloaded to temporary directory (`./tmp`)
+2. Archive is extracted based on the logic above
+3. Files are moved to final destination
+4. Temporary files are cleaned up
+5. Only tool-created temporary files are removed, user files in `./tmp` remain untouched
 
 If `extract` is not specified or set to `false`, the file is downloaded as-is without extraction.
 
@@ -234,7 +271,6 @@ Mark private dependencies in your config:
 ```json
 {
   "private_tool": {
-    "name": "private_tool",
     "path": "tools/private_tool", 
     "source": "https://github.com/private-org/tool.git",
     "type": "binary",
@@ -307,6 +343,7 @@ glitch_deps help
 
 - **Binary dependencies**: Downloads assets from GitHub releases. If `asset_suffix` is specified, searches for matching assets; otherwise downloads the first available asset
 - **Repository dependencies**: Clones or pulls the latest changes from Git repositories  
+- **Archive extraction**: Supports `.tar.gz`, `.tar.xz`, and `.zip` formats with intelligent single-file vs multi-file handling
 - **Version tracking**: Creates corresponding lock files (e.g., `my_deps-lock.json`) to track installed versions and hashes
 - **Smart updates**: Detects when updates are available and notifies you
 - **Safe cleanup**: Only removes temporary files created by the tool, preserving user files in `./tmp`

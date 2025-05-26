@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -25,13 +26,13 @@ var (
 )
 
 type Dependency struct {
-	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Type        string `json:"type,omitempty"`
 	AssetSuffix string `json:"asset_suffix,omitempty"`
 	Private     bool   `json:"private,omitempty"`
 	Extract     bool   `json:"extract,omitempty"`
+	Name        string `json:"name,omitempty"`
 }
 type LockDependency struct {
 	Name    string `json:"name"`
@@ -287,6 +288,8 @@ func (pm *PackageManager) extractArchive(archivePath, targetDir string) error {
 		return pm.extractTarGz(archivePath, targetDir)
 	} else if strings.HasSuffix(archivePath, ".tar.xz") {
 		return pm.extractTarXz(archivePath, targetDir)
+	} else if strings.HasSuffix(archivePath, ".zip") {
+		return pm.extractZip(archivePath, targetDir)
 	}
 
 	return fmt.Errorf("unsupported archive format: %s", archivePath)
@@ -366,6 +369,59 @@ func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir stri
 
 	return nil
 }
+func (pm *PackageManager) extractZip(archivePath, targetDir string) error {
+	fmt.Printf("Extracting ZIP archive %s to %s...\n", archivePath, targetDir)
+
+	zipReader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open ZIP archive: %v", err)
+	}
+	defer zipReader.Close()
+
+	for _, file := range zipReader.File {
+		targetPath := filepath.Join(targetDir, file.Name)
+		if !strings.HasPrefix(targetPath, filepath.Clean(targetDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid file path: %s", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			err = os.MkdirAll(targetPath, file.Mode())
+			if err != nil {
+				return fmt.Errorf("failed to create directory %s: %v", targetPath, err)
+			}
+			continue
+		}
+
+		err = os.MkdirAll(filepath.Dir(targetPath), 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create parent directory for %s: %v", targetPath, err)
+		}
+
+		fileReader, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open file %s: %v", file.Name, err)
+		}
+		defer fileReader.Close()
+
+		targetFile, err := os.Create(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to create file %s: %v", targetPath, err)
+		}
+		defer targetFile.Close()
+
+		_, err = io.Copy(targetFile, fileReader)
+		if err != nil {
+			return fmt.Errorf("failed to write file %s: %v", targetPath, err)
+		}
+
+		err = targetFile.Chmod(file.Mode())
+		if err != nil {
+			return fmt.Errorf("failed to set permissions for %s: %v", targetPath, err)
+		}
+	}
+
+	return nil
+}
 func (pm *PackageManager) buildAuthenticatedGitURL(source string, isPrivate bool) string {
 	if !isPrivate || pm.githubToken == "" {
 		return source
@@ -421,11 +477,11 @@ func (pm *PackageManager) determineDependencyType(name string) string {
 	}
 	return "repository"
 }
-func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, error) {
-	fmt.Printf("Installing dependency: %s\n", dep.Name)
+func (pm *PackageManager) installDependency(depName string, dep Dependency) (LockDependency, error) {
+	fmt.Printf("Installing dependency: %s\n", depName)
 	depType := dep.Type
 	if depType == "" {
-		depType = pm.determineDependencyType(dep.Name)
+		depType = pm.determineDependencyType(depName)
 	}
 
 	if depType == "binary" {
@@ -483,7 +539,7 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			fmt.Printf("No asset_suffix specified, using first available asset: %s\n", asset.Name)
 		}
 		var actualTargetPath string
-		if dep.Extract && (strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz")) {
+		if dep.Extract && (strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") || strings.HasSuffix(assetName, ".zip")) {
 			tmpDir := filepath.Join(pm.workDir, "tmp")
 			err := os.MkdirAll(tmpDir, 0755)
 			if err != nil {
@@ -502,62 +558,80 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			return LockDependency{}, fmt.Errorf("failed to download binary: %v", err)
 		}
 		if dep.Extract {
-			if strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") {
-				var extractDir string
+			if strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") || strings.HasSuffix(assetName, ".zip") {
+				tmpExtractDir := filepath.Join(pm.workDir, "tmp", "extract_"+depName)
 
-				if strings.HasSuffix(expandedPath, "/") {
-					extractDir = filepath.Join(pm.workDir, expandedPath)
+				err = pm.extractArchive(actualTargetPath, tmpExtractDir)
+				if err != nil {
+					return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
+				}
 
-					err = pm.extractArchive(actualTargetPath, extractDir)
+				var extractedFiles []string
+				err = filepath.Walk(tmpExtractDir, func(path string, info os.FileInfo, err error) error {
 					if err != nil {
-						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
+						return err
+					}
+					if !info.IsDir() && path != tmpExtractDir {
+						extractedFiles = append(extractedFiles, path)
+					}
+					return nil
+				})
+				if err != nil {
+					return LockDependency{}, fmt.Errorf("failed to walk extracted files: %v", err)
+				}
+
+				fmt.Printf("Found %d files in archive\n", len(extractedFiles))
+
+				if dep.Name != "" {
+					if len(extractedFiles) > 1 {
+						return LockDependency{}, fmt.Errorf("name specified but archive contains %d files (expected 1). Remove name to extract all files to directory", len(extractedFiles))
+					}
+					if len(extractedFiles) == 0 {
+						return LockDependency{}, fmt.Errorf("no files found in archive")
 					}
 
-					fmt.Printf("Extracted archive to directory: %s\n", extractDir)
-				} else {
-					tmpExtractDir := filepath.Join(pm.workDir, "tmp", "extract_"+dep.Name)
-
-					err = pm.extractArchive(actualTargetPath, tmpExtractDir)
-					if err != nil {
-						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
-					}
-					files, err := filepath.Glob(filepath.Join(tmpExtractDir, "*"))
-					if err != nil {
-						return LockDependency{}, fmt.Errorf("failed to list extracted files: %v", err)
-					}
-					var extractedFiles []string
-					for _, file := range files {
-						if info, err := os.Stat(file); err == nil && !info.IsDir() {
-							extractedFiles = append(extractedFiles, file)
-						}
-					}
-
-					finalDir := filepath.Dir(filepath.Join(pm.workDir, expandedPath))
-					err = os.MkdirAll(finalDir, 0755)
+					targetDir := filepath.Join(pm.workDir, expandedPath)
+					err = os.MkdirAll(targetDir, 0755)
 					if err != nil {
 						return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
 					}
 
-					if len(extractedFiles) == 1 {
-						finalPath := filepath.Join(pm.workDir, expandedPath)
-						err = os.Rename(extractedFiles[0], finalPath)
-						if err != nil {
-							return LockDependency{}, fmt.Errorf("failed to move extracted file: %v", err)
-						}
-						fmt.Printf("Extracted single file to: %s\n", finalPath)
-					} else {
-						for _, file := range extractedFiles {
-							fileName := filepath.Base(file)
-							finalPath := filepath.Join(finalDir, fileName)
-							err = os.Rename(file, finalPath)
-							if err != nil {
-								return LockDependency{}, fmt.Errorf("failed to move extracted file %s: %v", fileName, err)
-							}
-						}
-						fmt.Printf("Extracted %d files to directory: %s\n", len(extractedFiles), finalDir)
+					finalPath := filepath.Join(targetDir, dep.Name)
+					err = os.Rename(extractedFiles[0], finalPath)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to move extracted file: %v", err)
 					}
-					os.RemoveAll(tmpExtractDir)
+					fmt.Printf("Extracted single file as: %s\n", finalPath)
+				} else {
+					targetDir := filepath.Join(pm.workDir, expandedPath)
+					err = os.MkdirAll(targetDir, 0755)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
+					}
+
+					for _, file := range extractedFiles {
+						relPath, err := filepath.Rel(tmpExtractDir, file)
+						if err != nil {
+							return LockDependency{}, fmt.Errorf("failed to get relative path for %s: %v", file, err)
+						}
+
+						finalPath := filepath.Join(targetDir, relPath)
+						finalDir := filepath.Dir(finalPath)
+
+						err = os.MkdirAll(finalDir, 0755)
+						if err != nil {
+							return LockDependency{}, fmt.Errorf("failed to create directory %s: %v", finalDir, err)
+						}
+
+						err = os.Rename(file, finalPath)
+						if err != nil {
+							return LockDependency{}, fmt.Errorf("failed to move extracted file %s: %v", relPath, err)
+						}
+					}
+					fmt.Printf("Extracted %d files to directory: %s\n", len(extractedFiles), targetDir)
 				}
+
+				os.RemoveAll(tmpExtractDir)
 				err = os.Remove(actualTargetPath)
 				if err != nil {
 					fmt.Printf("Warning: failed to remove archive file %s: %v\n", actualTargetPath, err)
@@ -568,7 +642,7 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		}
 
 		lockDep := LockDependency{
-			Name:    dep.Name,
+			Name:    depName,
 			Path:    expandedPath,
 			Source:  dep.Source,
 			Version: release.TagName,
@@ -578,7 +652,7 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			Extract: dep.Extract,
 		}
 
-		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, release.TagName)
+		fmt.Printf("✓ Installed: %s (version: %s)\n", depName, release.TagName)
 		return lockDep, nil
 
 	} else {
@@ -595,11 +669,11 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 
 		err = pm.cloneOrUpdateRepo(dep.Source, targetPath, dep.Private)
 		if err != nil {
-			return LockDependency{}, fmt.Errorf("failed to install %s: %v", dep.Name, err)
+			return LockDependency{}, fmt.Errorf("failed to install %s: %v", depName, err)
 		}
 
 		lockDep := LockDependency{
-			Name:    dep.Name,
+			Name:    depName,
 			Path:    expandedPath,
 			Source:  dep.Source,
 			Version: hash,
@@ -609,7 +683,7 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			Extract: dep.Extract,
 		}
 
-		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, hash)
+		fmt.Printf("✓ Installed: %s (version: %s)\n", depName, hash)
 		return lockDep, nil
 	}
 }
@@ -627,7 +701,7 @@ func (pm *PackageManager) Install() error {
 	newLock := make(LockFile)
 	hasUpdates := false
 	for name, dep := range deps {
-		lockDep, err := pm.installDependency(dep)
+		lockDep, err := pm.installDependency(name, dep)
 		if err != nil {
 			fmt.Printf("❌ Installation error for %s: %v\n", name, err)
 			continue
@@ -672,7 +746,7 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 		}
 
 		fmt.Printf("Updating %s...\n", dependencyName)
-		lockDep, err := pm.installDependency(dep)
+		lockDep, err := pm.installDependency(dependencyName, dep)
 		if err != nil {
 			return fmt.Errorf("failed to update %s: %v", dependencyName, err)
 		}
@@ -685,7 +759,7 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 	} else {
 		for name, dep := range deps {
 			fmt.Printf("Updating %s...\n", name)
-			lockDep, err := pm.installDependency(dep)
+			lockDep, err := pm.installDependency(name, dep)
 			if err != nil {
 				fmt.Printf("❌ Update error for %s: %v\n", name, err)
 				continue
@@ -746,7 +820,7 @@ func (pm *PackageManager) SelfUpdate() error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %v", err)
 	}
-	defer os.RemoveAll(tmpDir) // Clean up temp directory
+	defer os.RemoveAll(tmpDir)
 
 	downloadPath := filepath.Join(tmpDir, assetName)
 	err = pm.downloadBinary(downloadURL, downloadPath, false)
@@ -781,7 +855,29 @@ func (pm *PackageManager) SelfUpdate() error {
 			return fmt.Errorf("no executable binary found in archive")
 		}
 	} else if strings.HasSuffix(assetName, ".zip") {
-		return fmt.Errorf("ZIP archives not yet supported for self-update")
+		extractDir := filepath.Join(tmpDir, "extracted")
+		err = pm.extractArchive(downloadPath, extractDir)
+		if err != nil {
+			return fmt.Errorf("failed to extract ZIP archive: %v", err)
+		}
+
+		files, err := filepath.Glob(filepath.Join(extractDir, "*"))
+		if err != nil {
+			return fmt.Errorf("failed to list extracted files: %v", err)
+		}
+
+		for _, file := range files {
+			if info, err := os.Stat(file); err == nil && !info.IsDir() {
+				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "glitch_deps") {
+					newBinaryPath = file
+					break
+				}
+			}
+		}
+
+		if newBinaryPath == "" {
+			return fmt.Errorf("no executable binary found in ZIP archive")
+		}
 	} else {
 		newBinaryPath = downloadPath
 	}
