@@ -13,32 +13,29 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"time"
+	"archive/tar"
+	"compress/gzip"
+	"github.com/ulikunitz/xz"
 )
-
-// Dependency represents a dependency in GLITCH_DEPS.json
 type Dependency struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Source      string `json:"source"`
-	Type        string `json:"type,omitempty"`         // "binary" or "repository"
-	AssetSuffix string `json:"asset_suffix,omitempty"` // e.g. "linux_amd64", "windows_amd64", "darwin_amd64"
-	Private     bool   `json:"private,omitempty"`      // true for private repositories
+	Type        string `json:"type,omitempty"`         
+	AssetSuffix string `json:"asset_suffix,omitempty"` 
+	Private     bool   `json:"private,omitempty"`      
+	Extract     bool   `json:"extract,omitempty"`      
 }
-
-// LockDependency represents a dependency in GLITCH_DEPS-lock.json
 type LockDependency struct {
 	Name      string    `json:"name"`
 	Path      string    `json:"path"`
 	Source    string    `json:"source"`
 	Version   string    `json:"version"`
 	Hash      string    `json:"hash"`
-	UpdatedAt time.Time `json:"updated_at"`
 	Type      string    `json:"type"`
 	Private   bool      `json:"private,omitempty"`
+	Extract   bool      `json:"extract,omitempty"`
 }
-
-// GitHubRelease structure for GitHub API response
 type GitHubRelease struct {
 	TagName string `json:"tag_name"`
 	Assets  []struct {
@@ -47,43 +44,44 @@ type GitHubRelease struct {
 		BrowserDownloadURL string `json:"browser_download_url"`
 	} `json:"assets"`
 }
-
-// DepsFile structure for GLITCH_DEPS.json
 type DepsFile map[string]Dependency
-
-// LockFile structure for GLITCH_DEPS-lock.json
 type LockFile map[string]LockDependency
 
 const (
 	DepsFileName = "GLITCH_DEPS.json"
 	LockFileName = "GLITCH_DEPS-lock.json"
 )
-
-// PackageManager main package manager
 type PackageManager struct {
 	workDir     string
 	githubToken string
+	configPath  string
+	lockPath    string
 }
-
-// NewPackageManager creates a new instance of the manager
-func NewPackageManager() *PackageManager {
+func NewPackageManager(configPath string) *PackageManager {
 	wd, err := os.Getwd()
 	if err != nil {
 		log.Fatal("Failed to get working directory:", err)
 	}
-	
-	// Read GitHub token from environment variable
 	githubToken := os.Getenv("GLITCH_DEPS_GITHUB_PAT")
+	if configPath == "" {
+		configPath = DepsFileName
+	}
+	lockPath := generateLockFileName(configPath)
 	
 	return &PackageManager{
 		workDir:     wd,
 		githubToken: githubToken,
+		configPath:  configPath,
+		lockPath:    lockPath,
 	}
 }
-
-// loadDepsFile loads GLITCH_DEPS.json
+func generateLockFileName(configPath string) string {
+	ext := filepath.Ext(configPath)
+	nameWithoutExt := strings.TrimSuffix(configPath, ext)
+	return nameWithoutExt + "-lock.json"
+}
 func (pm *PackageManager) loadDepsFile() (DepsFile, error) {
-	depsPath := filepath.Join(pm.workDir, DepsFileName)
+	depsPath := filepath.Join(pm.workDir, pm.configPath)
 	data, err := ioutil.ReadFile(depsPath)
 	if err != nil {
 		return nil, err
@@ -93,13 +91,11 @@ func (pm *PackageManager) loadDepsFile() (DepsFile, error) {
 	err = json.Unmarshal(data, &deps)
 	return deps, err
 }
-
-// loadLockFile loads GLITCH_DEPS-lock.json
 func (pm *PackageManager) loadLockFile() (LockFile, error) {
-	lockPath := filepath.Join(pm.workDir, LockFileName)
+	lockPath := filepath.Join(pm.workDir, pm.lockPath)
 	data, err := ioutil.ReadFile(lockPath)
 	if err != nil {
-		return make(LockFile), nil // Return empty lock if file doesn't exist
+		return make(LockFile), nil 
 	}
 
 	var lock LockFile
@@ -109,20 +105,15 @@ func (pm *PackageManager) loadLockFile() (LockFile, error) {
 	}
 	return lock, nil
 }
-
-// saveLockFile saves GLITCH_DEPS-lock.json
 func (pm *PackageManager) saveLockFile(lock LockFile) error {
-	lockPath := filepath.Join(pm.workDir, LockFileName)
+	lockPath := filepath.Join(pm.workDir, pm.lockPath)
 	data, err := json.MarshalIndent(lock, "", "  ")
 	if err != nil {
 		return err
 	}
 	return ioutil.WriteFile(lockPath, data, 0644)
 }
-
-// extractRepoInfo extracts repository information from URL
 func (pm *PackageManager) extractRepoInfo(source string) (string, string, error) {
-	// Parse URL format https://github.com/owner/repo.git
 	re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)(?:\.git)?`)
 	matches := re.FindStringSubmatch(source)
 	if len(matches) < 3 {
@@ -130,32 +121,22 @@ func (pm *PackageManager) extractRepoInfo(source string) (string, string, error)
 	}
 	return matches[1], strings.TrimSuffix(matches[2], ".git"), nil
 }
-
-// createAuthenticatedRequest creates an HTTP request with authorization for private repositories
 func (pm *PackageManager) createAuthenticatedRequest(method, url string) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	
-	// Add token if it exists
 	if pm.githubToken != "" {
 		req.Header.Set("Authorization", "Bearer "+pm.githubToken)
 	}
-	
-	// GitHub releases API needs a special Accept header
 	if strings.Contains(url, "releases/download") {
 		req.Header.Set("Accept", "application/octet-stream")
 	}
 	
 	return req, nil
 }
-
-// getLatestRelease gets the latest release information from GitHub API
 func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (*GitHubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
-	
-	// For private repositories, check for token presence
 	if isPrivate && pm.githubToken == "" {
 		return nil, fmt.Errorf("private repository %s/%s requires GLITCH_DEPS_GITHUB_PAT", owner, repo)
 	}
@@ -188,8 +169,6 @@ func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (
 
 	return &release, nil
 }
-
-// downloadAssetViaAPI downloads asset via GitHub API
 func (pm *PackageManager) downloadAssetViaAPI(owner, repo string, assetID int, targetPath string, isPrivate bool) error {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/assets/%d", owner, repo, assetID)
 	fmt.Printf("Downloading via API: %s...\n", url)
@@ -235,8 +214,6 @@ func (pm *PackageManager) downloadAssetViaAPI(owner, repo string, assetID int, t
 
 	return nil
 }
-
-// downloadBinary downloads a binary file
 func (pm *PackageManager) downloadBinary(url, targetPath string, isPrivate bool) error {
 	fmt.Printf("Downloading %s...\n", url)
 	
@@ -291,22 +268,105 @@ func (pm *PackageManager) downloadBinary(url, targetPath string, isPrivate bool)
 
 	return nil
 }
-
-// buildAuthenticatedGitURL creates URL for git with token for private repositories
+func (pm *PackageManager) extractArchive(archivePath, targetDir string) error {
+	fmt.Printf("Extracting archive %s to %s...\n", archivePath, targetDir)
+	err := os.MkdirAll(targetDir, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create target directory: %v", err)
+	}
+	if strings.HasSuffix(archivePath, ".tar.gz") {
+		return pm.extractTarGz(archivePath, targetDir)
+	} else if strings.HasSuffix(archivePath, ".tar.xz") {
+		return pm.extractTarXz(archivePath, targetDir)
+	}
+	
+	return fmt.Errorf("unsupported archive format: %s", archivePath)
+}
+func (pm *PackageManager) extractTarGz(archivePath, targetDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open archive: %v", err)
+	}
+	defer file.Close()
+	
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %v", err)
+	}
+	defer gzReader.Close()
+	
+	tarReader := tar.NewReader(gzReader)
+	
+	return pm.extractTarReader(tarReader, targetDir)
+}
+func (pm *PackageManager) extractTarXz(archivePath, targetDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open archive: %v", err)
+	}
+	defer file.Close()
+	
+	xzReader, err := xz.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("failed to create xz reader: %v", err)
+	}
+	
+	tarReader := tar.NewReader(xzReader)
+	
+	return pm.extractTarReader(tarReader, targetDir)
+}
+func (pm *PackageManager) extractTarReader(tarReader *tar.Reader, targetDir string) error {
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %v", err)
+		}
+		
+		targetPath := filepath.Join(targetDir, header.Name)
+		if !strings.HasPrefix(targetPath, filepath.Clean(targetDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid file path: %s", header.Name)
+		}
+		
+		switch header.Typeflag {
+		case tar.TypeDir:
+			err = os.MkdirAll(targetPath, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create directory %s: %v", targetPath, err)
+			}
+		case tar.TypeReg:
+			err = os.MkdirAll(filepath.Dir(targetPath), 0755)
+			if err != nil {
+				return fmt.Errorf("failed to create parent directory for %s: %v", targetPath, err)
+			}
+			
+			file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %v", targetPath, err)
+			}
+			
+			_, err = io.Copy(file, tarReader)
+			file.Close()
+			if err != nil {
+				return fmt.Errorf("failed to write file %s: %v", targetPath, err)
+			}
+		}
+	}
+	
+	return nil
+}
 func (pm *PackageManager) buildAuthenticatedGitURL(source string, isPrivate bool) string {
 	if !isPrivate || pm.githubToken == "" {
 		return source
 	}
-	
-	// Convert https://github.com/owner/repo.git to https://token@github.com/owner/repo.git
 	if strings.HasPrefix(source, "https://github.com/") {
 		return strings.Replace(source, "https://github.com/", "https://"+pm.githubToken+"@github.com/", 1)
 	}
 	
 	return source
 }
-
-// getLatestCommitHash gets the latest commit from Git repository
 func (pm *PackageManager) getLatestCommitHash(source string, isPrivate bool) (string, error) {
 	gitURL := pm.buildAuthenticatedGitURL(source, isPrivate)
 	
@@ -323,49 +383,37 @@ func (pm *PackageManager) getLatestCommitHash(source string, isPrivate bool) (st
 	if len(lines) > 0 && len(lines[0]) > 0 {
 		parts := strings.Fields(lines[0])
 		if len(parts) > 0 {
-			return parts[0][:8], nil // Return short hash
+			return parts[0][:8], nil 
 		}
 	}
 	return "", fmt.Errorf("failed to parse git ls-remote output")
 }
-
-// cloneOrUpdateRepo clones or updates repository
 func (pm *PackageManager) cloneOrUpdateRepo(source, targetPath string, isPrivate bool) error {
 	gitURL := pm.buildAuthenticatedGitURL(source, isPrivate)
 	
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-		// Clone repository
 		fmt.Printf("Cloning %s to %s...\n", source, targetPath)
 		cmd := exec.Command("git", "clone", gitURL, targetPath)
 		return cmd.Run()
 	} else {
-		// Update existing repository
 		fmt.Printf("Updating %s...\n", targetPath)
 		cmd := exec.Command("git", "-C", targetPath, "pull", "origin", "main")
 		err := cmd.Run()
 		if err != nil {
-			// Try master if main didn't work
 			cmd = exec.Command("git", "-C", targetPath, "pull", "origin", "master")
 			return cmd.Run()
 		}
 		return err
 	}
 }
-
-// determineDependencyType determines dependency type by name
 func (pm *PackageManager) determineDependencyType(name string) string {
-	// If name contains "provider", then it's a binary dependency
 	if strings.Contains(strings.ToLower(name), "provider") {
 		return "binary"
 	}
 	return "repository"
 }
-
-// installDependency installs one dependency
 func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, error) {
 	fmt.Printf("Installing dependency: %s\n", dep.Name)
-
-	// Determine dependency type
 	depType := dep.Type
 	if depType == "" {
 		depType = pm.determineDependencyType(dep.Name)
@@ -374,7 +422,6 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 	targetPath := filepath.Join(pm.workDir, dep.Path)
 
 	if depType == "binary" {
-		// Download binary file from GitHub releases
 		owner, repo, err := pm.extractRepoInfo(dep.Source)
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to parse repository URL: %v", err)
@@ -384,60 +431,126 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to get release info: %v", err)
 		}
-
-		// Output all available assets for debugging
 		fmt.Printf("Available assets in release %s:\n", release.TagName)
 		for i, asset := range release.Assets {
 			fmt.Printf("  [%d] %s -> %s\n", i, asset.Name, asset.BrowserDownloadURL)
 		}
-
-		// Find suitable asset for specified suffix or any asset if suffix is empty
 		assetSuffix := pm.getAssetSuffixFromDep(dep)
 		
 		var downloadURL string
 		var assetID int
+		var assetName string
 		
 		if assetSuffix != "" {
-			// Search for specific asset suffix
-			assetSuffixParts := strings.Split(assetSuffix, "_")
-			if len(assetSuffixParts) != 2 {
-				return LockDependency{}, fmt.Errorf("invalid asset_suffix format: %s (expected format: os_arch)", assetSuffix)
-			}
-			goos, goarch := assetSuffixParts[0], assetSuffixParts[1]
+			var found bool
 			
 			for _, asset := range release.Assets {
-				if strings.Contains(asset.Name, assetSuffix) || 
-				   (strings.Contains(asset.Name, goos) && strings.Contains(asset.Name, goarch)) {
+				if strings.Contains(asset.Name, assetSuffix) {
 					downloadURL = asset.BrowserDownloadURL
 					assetID = asset.ID
+					assetName = asset.Name
+					found = true
+					fmt.Printf("Found matching asset: %s\n", asset.Name)
 					break
 				}
 			}
 			
-			if downloadURL == "" {
+			if !found {
 				return LockDependency{}, fmt.Errorf("no suitable asset found for %s in release %s", assetSuffix, release.TagName)
 			}
 		} else {
-			// No specific suffix - take the first available asset
 			if len(release.Assets) == 0 {
 				return LockDependency{}, fmt.Errorf("no assets found in release %s", release.TagName)
 			}
-			
-			// Take the first asset
 			asset := release.Assets[0]
 			downloadURL = asset.BrowserDownloadURL
 			assetID = asset.ID
+			assetName = asset.Name
 			fmt.Printf("No asset_suffix specified, using first available asset: %s\n", asset.Name)
 		}
-
-		// For private repositories, use API, for public - direct links
-		if dep.Private {
-			err = pm.downloadAssetViaAPI(owner, repo, assetID, targetPath, dep.Private)
+		var actualTargetPath string
+		if dep.Extract && (strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz")) {
+			tmpDir := filepath.Join(pm.workDir, "tmp")
+			err := os.MkdirAll(tmpDir, 0755)
+			if err != nil {
+				return LockDependency{}, fmt.Errorf("failed to create tmp directory: %v", err)
+			}
+			actualTargetPath = filepath.Join(tmpDir, assetName)
 		} else {
-			err = pm.downloadBinary(downloadURL, targetPath, dep.Private)
+			actualTargetPath = targetPath
+		}
+		if dep.Private {
+			err = pm.downloadAssetViaAPI(owner, repo, assetID, actualTargetPath, dep.Private)
+		} else {
+			err = pm.downloadBinary(downloadURL, actualTargetPath, dep.Private)
 		}
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to download binary: %v", err)
+		}
+		if dep.Extract {
+			if strings.HasSuffix(assetName, ".tar.gz") || strings.HasSuffix(assetName, ".tar.xz") {
+				var extractDir string
+				
+				if strings.HasSuffix(dep.Path, "/") {
+					extractDir = filepath.Join(pm.workDir, dep.Path)
+					
+					err = pm.extractArchive(actualTargetPath, extractDir)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
+					}
+					
+					fmt.Printf("Extracted archive to directory: %s\n", extractDir)
+				} else {
+					tmpExtractDir := filepath.Join(pm.workDir, "tmp", "extract_"+dep.Name)
+					
+					err = pm.extractArchive(actualTargetPath, tmpExtractDir)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to extract archive: %v", err)
+					}
+					files, err := filepath.Glob(filepath.Join(tmpExtractDir, "*"))
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to list extracted files: %v", err)
+					}
+					var extractedFiles []string
+					for _, file := range files {
+						if info, err := os.Stat(file); err == nil && !info.IsDir() {
+							extractedFiles = append(extractedFiles, file)
+						}
+					}
+					
+					finalDir := filepath.Dir(filepath.Join(pm.workDir, dep.Path))
+					err = os.MkdirAll(finalDir, 0755)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
+					}
+					
+					if len(extractedFiles) == 1 {
+						finalPath := filepath.Join(pm.workDir, dep.Path)
+						err = os.Rename(extractedFiles[0], finalPath)
+						if err != nil {
+							return LockDependency{}, fmt.Errorf("failed to move extracted file: %v", err)
+						}
+						fmt.Printf("Extracted single file to: %s\n", finalPath)
+					} else {
+						for _, file := range extractedFiles {
+							fileName := filepath.Base(file)
+							finalPath := filepath.Join(finalDir, fileName)
+							err = os.Rename(file, finalPath)
+							if err != nil {
+								return LockDependency{}, fmt.Errorf("failed to move extracted file %s: %v", fileName, err)
+							}
+						}
+						fmt.Printf("Extracted %d files to directory: %s\n", len(extractedFiles), finalDir)
+					}
+					os.RemoveAll(tmpExtractDir)
+				}
+				err = os.Remove(actualTargetPath)
+				if err != nil {
+					fmt.Printf("Warning: failed to remove archive file %s: %v\n", actualTargetPath, err)
+				}
+			} else {
+				fmt.Printf("Warning: extract flag is set but %s is not a supported archive format\n", assetName)
+			}
 		}
 
 		lockDep := LockDependency{
@@ -446,22 +559,19 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			Source:    dep.Source,
 			Version:   release.TagName,
 			Hash:      release.TagName,
-			UpdatedAt: time.Now(),
 			Type:      "binary",
 			Private:   dep.Private,
+			Extract:   dep.Extract,
 		}
 
 		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, release.TagName)
 		return lockDep, nil
 
 	} else {
-		// Clone repository as before
 		err := pm.cloneOrUpdateRepo(dep.Source, targetPath, dep.Private)
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to install %s: %v", dep.Name, err)
 		}
-
-		// Get latest commit hash
 		hash, err := pm.getLatestCommitHash(dep.Source, dep.Private)
 		if err != nil {
 			hash = "unknown"
@@ -473,44 +583,34 @@ func (pm *PackageManager) installDependency(dep Dependency) (LockDependency, err
 			Source:    dep.Source,
 			Version:   hash,
 			Hash:      hash,
-			UpdatedAt: time.Now(),
 			Type:      "repository",
 			Private:   dep.Private,
+			Extract:   dep.Extract,
 		}
 
 		fmt.Printf("✓ Installed: %s (version: %s)\n", dep.Name, hash)
 		return lockDep, nil
 	}
 }
-
-// Install command to install dependencies
 func (pm *PackageManager) Install() error {
 	fmt.Println("🚀 Starting dependency installation...")
-
-	// Load dependencies file
 	deps, err := pm.loadDepsFile()
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %v", DepsFileName, err)
+		return fmt.Errorf("failed to load %s: %v", pm.configPath, err)
 	}
-
-	// Load lock file
 	lock, err := pm.loadLockFile()
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %v", LockFileName, err)
+		return fmt.Errorf("failed to load %s: %v", pm.lockPath, err)
 	}
 
 	newLock := make(LockFile)
 	hasUpdates := false
-
-	// Install each dependency
 	for name, dep := range deps {
 		lockDep, err := pm.installDependency(dep)
 		if err != nil {
 			fmt.Printf("❌ Installation error for %s: %v\n", name, err)
 			continue
 		}
-
-		// Check for updates
 		if oldLock, exists := lock[name]; exists {
 			if oldLock.Hash != lockDep.Hash {
 				fmt.Printf("📦 Update available for %s: %s -> %s\n", name, oldLock.Hash, lockDep.Hash)
@@ -522,11 +622,9 @@ func (pm *PackageManager) Install() error {
 
 		newLock[name] = lockDep
 	}
-
-	// Save lock file
 	err = pm.saveLockFile(newLock)
 	if err != nil {
-		return fmt.Errorf("failed to save %s: %v", LockFileName, err)
+		return fmt.Errorf("failed to save %s: %v", pm.lockPath, err)
 	}
 
 	if hasUpdates {
@@ -536,24 +634,16 @@ func (pm *PackageManager) Install() error {
 	fmt.Println("✅ Installation completed!")
 	return nil
 }
-
-// Update command to update dependencies
 func (pm *PackageManager) Update(dependencyName, version string) error {
 	fmt.Println("🔄 Starting dependency update...")
-
-	// Load dependencies file
 	deps, err := pm.loadDepsFile()
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %v", DepsFileName, err)
+		return fmt.Errorf("failed to load %s: %v", pm.configPath, err)
 	}
-
-	// Load lock file
 	lock, err := pm.loadLockFile()
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %v", LockFileName, err)
+		return fmt.Errorf("failed to load %s: %v", pm.lockPath, err)
 	}
-
-	// If specific dependency is specified
 	if dependencyName != "" {
 		dep, exists := deps[dependencyName]
 		if !exists {
@@ -565,8 +655,6 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 		if err != nil {
 			return fmt.Errorf("failed to update %s: %v", dependencyName, err)
 		}
-
-		// If specific version is specified
 		if version != "" {
 			lockDep.Version = version
 			lockDep.Hash = version
@@ -574,7 +662,6 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 
 		lock[dependencyName] = lockDep
 	} else {
-		// Update all dependencies
 		for name, dep := range deps {
 			fmt.Printf("Updating %s...\n", name)
 			lockDep, err := pm.installDependency(dep)
@@ -585,37 +672,27 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 			lock[name] = lockDep
 		}
 	}
-
-	// Save updated lock file
 	err = pm.saveLockFile(lock)
 	if err != nil {
-		return fmt.Errorf("failed to save %s: %v", LockFileName, err)
+		return fmt.Errorf("failed to save %s: %v", pm.lockPath, err)
 	}
 
 	fmt.Println("✅ Update completed!")
 	return nil
 }
-
-// SelfUpdate updates the glitch_deps binary to the latest version
 func (pm *PackageManager) SelfUpdate() error {
 	fmt.Println("🔄 Checking for glitch_deps updates...")
 	
 	const repoOwner = "glitch-vpn"
 	const repoName = "glitch-deps"
-	
-	// Get latest release
 	release, err := pm.getLatestRelease(repoOwner, repoName, false)
 	if err != nil {
 		return fmt.Errorf("failed to get latest release: %v", err)
 	}
 	
 	fmt.Printf("Latest version: %s\n", release.TagName)
-	
-	// Find suitable asset for current platform
 	var downloadURL string
 	var assetName string
-	
-	// Determine current platform
 	platform := getDefaultPlatform()
 	platformParts := strings.Split(platform, "_")
 	if len(platformParts) != 2 {
@@ -637,26 +714,17 @@ func (pm *PackageManager) SelfUpdate() error {
 	}
 	
 	fmt.Printf("Downloading %s...\n", assetName)
-	
-	// Get current executable path
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %v", err)
 	}
-	
-	// Create temporary file
 	tempPath := execPath + ".tmp"
-	
-	// Download new binary
 	err = pm.downloadBinary(downloadURL, tempPath, false)
 	if err != nil {
 		return fmt.Errorf("failed to download update: %v", err)
 	}
-	
-	// Replace current binary
 	err = os.Rename(tempPath, execPath)
 	if err != nil {
-		// Clean up temp file
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to replace binary: %v", err)
 	}
@@ -664,28 +732,40 @@ func (pm *PackageManager) SelfUpdate() error {
 	fmt.Printf("✅ Successfully updated to %s\n", release.TagName)
 	return nil
 }
-
-// printUsage outputs usage help
 func printUsage() {
 	fmt.Println("Glitch Dependencies Manager")
 	fmt.Println("Usage:")
-	fmt.Println("  glitch_deps install                    - install dependencies")
-	fmt.Println("  glitch_deps update                     - update all dependencies")
-	fmt.Println("  glitch_deps update <dependency>        - update specific dependency")
-	fmt.Println("  glitch_deps update <dependency> <version> - update to specific version")
-	fmt.Println("  glitch_deps self-update                - update glitch_deps to latest version")
-	fmt.Println("  glitch_deps help                       - show this help")
+	fmt.Println("  glitch_deps install [-c config.json]       - install dependencies")
+	fmt.Println("  glitch_deps update [-c config.json]        - update all dependencies")
+	fmt.Println("  glitch_deps update <dependency> [-c config.json] - update specific dependency")
+	fmt.Println("  glitch_deps update <dependency> <version> [-c config.json] - update to specific version")
+	fmt.Println("  glitch_deps self-update                    - update glitch_deps to latest version")
+	fmt.Println("  glitch_deps help                           - show this help")
+	fmt.Println("")
+	fmt.Println("Flags:")
+	fmt.Println("  -c <path>                                  - path to config file (default: GLITCH_DEPS.json)")
 	fmt.Println("")
 	fmt.Println("Environment variables:")
-	fmt.Println("  GLITCH_DEPS_GITHUB_PAT                 - GitHub Personal Access Token for private repositories")
+	fmt.Println("  GLITCH_DEPS_GITHUB_PAT                     - GitHub Personal Access Token for private repositories")
 }
-
-// getDefaultPlatform returns the current platform in format "os_arch"
+func parseFlags(args []string) (string, []string) {
+	var configPath string
+	var remainingArgs []string
+	
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) {
+			configPath = args[i+1]
+			i++ 
+		} else {
+			remainingArgs = append(remainingArgs, args[i])
+		}
+	}
+	
+	return configPath, remainingArgs
+}
 func getDefaultPlatform() string {
 	return fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
 }
-
-// getAssetSuffixFromDep returns asset suffix from dependency or empty string
 func (pm *PackageManager) getAssetSuffixFromDep(dep Dependency) string {
 	return dep.AssetSuffix
 }
@@ -695,9 +775,15 @@ func main() {
 		printUsage()
 		return
 	}
+	configPath, args := parseFlags(os.Args[1:])
+	
+	if len(args) < 1 {
+		printUsage()
+		return
+	}
 
-	pm := NewPackageManager()
-	command := os.Args[1]
+	pm := NewPackageManager(configPath)
+	command := args[0]
 
 	switch command {
 	case "install":
@@ -708,11 +794,11 @@ func main() {
 
 	case "update":
 		var dependencyName, version string
-		if len(os.Args) > 2 {
-			dependencyName = os.Args[2]
+		if len(args) > 1 {
+			dependencyName = args[1]
 		}
-		if len(os.Args) > 3 {
-			version = os.Args[3]
+		if len(args) > 2 {
+			version = args[2]
 		}
 
 		err := pm.Update(dependencyName, version)

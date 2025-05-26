@@ -1,0 +1,20 @@
+{
+  "glitch_deps": {
+    "name": "glitch_deps",
+    "path": "bin/glitch_deps/",
+    "source": "https://github.com/glitch-vpn/glitch-deps.git",
+    "version": "v0.1.2",
+    "hash": "v0.1.2",
+    "type": "binary",
+    "extract": true
+  },
+  "ss": {
+    "name": "ss",
+    "path": "bin/ss/",
+    "source": "https://github.com/shadowsocks/shadowsocks-rust.git",
+    "version": "v1.23.4",
+    "hash": "v1.23.4",
+    "type": "binary",
+    "extract": true
+  }
+}
