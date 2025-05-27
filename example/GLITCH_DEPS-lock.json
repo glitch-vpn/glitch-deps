@@ -1,10 +1,18 @@
 {
+  "awg": {
+    "name": "awg",
+    "path": "sources/awg",
+    "source": "https://github.com/amnezia-vpn/amneziawg-tools.git",
+    "version": "v1.0.20241018",
+    "hash": "v1.0.20241018",
+    "type": "source"
+  },
   "glitch_deps": {
     "name": "glitch_deps",
     "path": "bin",
     "source": "https://github.com/glitch-vpn/glitch-deps.git",
-    "version": "v0.1.8",
-    "hash": "v0.1.8",
+    "version": "v0.1.9",
+    "hash": "v0.1.9",
     "type": "binary",
     "extract": true
   },

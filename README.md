@@ -11,6 +11,7 @@ A lightweight package manager for managing Git repository dependencies and GitHu
   - [Dependency Types](#dependency-types)
   - [Asset Suffix Specification](#asset-suffix-specification)
   - [Archive Extraction](#archive-extraction)
+  - [Source Code Dependencies](#source-code-dependencies)
   - [Private Repositories](#private-repositories)
   - [Path Variables](#path-variables)
 - [Commands](#commands)
@@ -46,6 +47,13 @@ go build -o glitch_deps main.go
     "source": "https://github.com/owner/library.git",
     "type": "repository"
   },
+  "source_code": {
+    "path": "sources/project",
+    "source": "https://github.com/owner/project.git",
+    "type": "source",
+    "asset_extension": "tar.gz",
+    "extract": true
+  },
   "private_tool": {
     "path": "tools/private_tool", 
     "source": "https://github.com/private-org/tool.git",
@@ -69,7 +77,9 @@ go build -o glitch_deps main.go
 You can use dynamic variables in dependency paths to create version-specific or environment-specific installations:
 
 **Supported variables:**
-- `@VERSION` - Replaced with the actual release version/tag (for binaries) or commit hash (for repositories)
+- `@VERSION` - Replaced with the actual release version/tag (for binaries/source) or commit hash (for repositories)
+- `@TIMESTAMP` - Replaced with current unix timestamp (seconds)
+- `@ASSET_EXTENSION` - Replaced with file extension (only when extract=false)
 - `$ENV_VAR` - Replaced with environment variable values
 
 **Examples:**
@@ -93,6 +103,13 @@ You can use dynamic variables in dependency paths to create version-specific or 
     "path": "libs/$PROJECT_NAME/@VERSION/",
     "source": "https://github.com/owner/library.git",
     "type": "repository"
+  },
+  "timestamped_backup": {
+    "path": "backups/@TIMESTAMP",
+    "source": "https://github.com/owner/project.git",
+    "type": "source",
+    "extract": false,
+    "filename": "backup-@VERSION-@TIMESTAMP.@ASSET_EXTENSION"
   }
 }
 ```
@@ -110,12 +127,14 @@ export PROJECT_NAME=myapp
 # bin/ss/v1.15.3/production/
 # tools/terraform-v1.6.0
 # libs/myapp/a1b2c3d4/
+# backups/1703123456/backup-v1.2.3-1703123456.tar.gz
 ```
 
 **Benefits:**
 - **Version isolation**: Keep multiple versions side by side
 - **Environment separation**: Different paths for dev/staging/production
 - **Dynamic organization**: Organize dependencies based on runtime context
+- **Timestamped backups**: Create unique timestamped archives
 - **Lock file tracking**: Expanded paths are stored in lock files for consistency
 
 ### Custom Config Files
@@ -143,7 +162,51 @@ This allows you to maintain separate dependency versions for different environme
 ### Dependency Types
 
 - **`binary`**: Downloads binary files from GitHub releases
+- **`source`**: Downloads source code archives from GitHub releases
 - **`repository`**: Clones Git repositories
+
+### Source Code Dependencies
+
+The `source` type allows you to download GitHub's automatically generated source code archives for any release:
+
+```json
+{
+  "project_source": {
+    "path": "sources/project",
+    "source": "https://github.com/owner/project.git",
+    "type": "source",
+    "asset_extension": "tar.gz",
+    "extract": true
+  },
+  "archived_source": {
+    "path": "archives",
+    "source": "https://github.com/owner/project.git",
+    "type": "source",
+    "asset_extension": "zip",
+    "extract": false,
+    "filename": "project-@VERSION-@TIMESTAMP.@ASSET_EXTENSION"
+  }
+}
+```
+
+**Source type configuration:**
+- **`asset_extension`** (optional): `"zip"` or `"tar.gz"` (default: `"tar.gz"`)
+- **`extract`** (optional): Extract archive contents (default: `false`)
+- **`filename`** (optional): Custom archive filename (only when `extract=false`)
+
+**Restrictions for source type:**
+- ❌ `asset_name` - Not allowed (source archives have fixed names)
+- ❌ `asset_suffix` - Not allowed (source archives have fixed names)
+- ❌ `filename` with `extract=true` - Cannot specify filename when extracting
+- ❌ `@ASSET_EXTENSION` with `extract=true` - Extension placeholder not meaningful when extracting
+
+**Source code URLs:**
+- ZIP: `https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip`
+- TAR.GZ: `https://github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz`
+
+**Extraction behavior:**
+- **`extract=true`**: Extracts source code to the specified directory, removing the top-level folder
+- **`extract=false`**: Downloads the archive file with optional custom filename
 
 ### Asset Suffix Specification
 
@@ -337,6 +400,13 @@ Mark private dependencies in your config:
     "type": "binary",
     "asset_suffix": "linux_amd64",
     "private": true
+  },
+  "private_source": {
+    "path": "sources/private_project",
+    "source": "https://github.com/private-org/project.git",
+    "type": "source",
+    "private": true,
+    "extract": true
   }
 }
 ```
@@ -403,11 +473,13 @@ glitch_deps help
 ## How It Works
 
 - **Binary dependencies**: Downloads assets from GitHub releases. If `asset_suffix` is specified, searches for matching assets; otherwise downloads the first available asset
+- **Source dependencies**: Downloads GitHub's automatically generated source code archives (ZIP/TAR.GZ) for any release
 - **Repository dependencies**: Clones or pulls the latest changes from Git repositories  
 - **Archive extraction**: Supports `.tar.gz`, `.tar.xz`, and `.zip` formats with intelligent single-file vs multi-file handling
 - **Version tracking**: Creates corresponding lock files (e.g., `my_deps-lock.json`) to track installed versions and hashes
 - **Smart updates**: Detects when updates are available and notifies you
 - **Safe cleanup**: Only removes temporary files created by the tool, preserving user files in `./tmp`
+- **Path substitutions**: Dynamic path expansion with version, timestamp, extension, and environment variables
 
 ## Requirements
 

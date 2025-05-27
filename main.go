@@ -14,7 +14,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ulikunitz/xz"
 )
@@ -477,6 +479,9 @@ func (pm *PackageManager) determineDependencyType(name string) string {
 	if strings.Contains(strings.ToLower(name), "provider") {
 		return "binary"
 	}
+	if strings.Contains(strings.ToLower(name), "source") {
+		return "source"
+	}
 	return "repository"
 }
 func (pm *PackageManager) installDependency(depName string, dep Dependency) (LockDependency, error) {
@@ -486,7 +491,166 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 		depType = pm.determineDependencyType(depName)
 	}
 
-	if depType == "binary" {
+	if depType == "source" {
+		if dep.AssetName != "" {
+			return LockDependency{}, fmt.Errorf("asset_name is not allowed for source type dependencies")
+		}
+		if dep.AssetSuffix != "" {
+			return LockDependency{}, fmt.Errorf("asset_suffix is not allowed for source type dependencies")
+		}
+		if dep.Extract && dep.Filename != "" {
+			return LockDependency{}, fmt.Errorf("filename cannot be used with extract=true for source type dependencies")
+		}
+		if dep.AssetExtension != "" && dep.AssetExtension != "zip" && dep.AssetExtension != "tar.gz" {
+			return LockDependency{}, fmt.Errorf("asset_extension for source type must be 'zip' or 'tar.gz', got '%s'", dep.AssetExtension)
+		}
+		if dep.Extract && (strings.Contains(dep.Path, "@ASSET_EXTENSION") || strings.Contains(dep.Filename, "@ASSET_EXTENSION")) {
+			return LockDependency{}, fmt.Errorf("@ASSET_EXTENSION placeholder cannot be used with extract=true")
+		}
+	}
+
+	if depType == "source" {
+		owner, repo, err := pm.extractRepoInfo(dep.Source)
+		if err != nil {
+			return LockDependency{}, fmt.Errorf("failed to parse repository URL: %v", err)
+		}
+
+		release, err := pm.getLatestRelease(owner, repo, dep.Private)
+		if err != nil {
+			return LockDependency{}, fmt.Errorf("failed to get release info: %v", err)
+		}
+
+		sourceFormat := "tar.gz"
+		if dep.AssetExtension != "" {
+			sourceFormat = dep.AssetExtension
+		}
+
+		expandedPath := pm.expandPathWithOptions(dep.Path, release.TagName, sourceFormat, dep.Extract)
+		fmt.Printf("Original path: %s\n", dep.Path)
+		fmt.Printf("Expanded path: %s\n", expandedPath)
+
+		targetPath := filepath.Join(pm.workDir, expandedPath)
+
+		var downloadURL string
+		if sourceFormat == "zip" {
+			downloadURL = fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/%s.zip", owner, repo, release.TagName)
+		} else {
+			downloadURL = fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/%s.tar.gz", owner, repo, release.TagName)
+		}
+
+		fmt.Printf("Downloading source code (%s) from: %s\n", sourceFormat, downloadURL)
+
+		var actualTargetPath string
+		var archiveName string
+
+		if dep.Filename != "" {
+			archiveName = pm.expandPathWithOptions(dep.Filename, release.TagName, sourceFormat, dep.Extract)
+		} else {
+			archiveName = fmt.Sprintf("%s-%s.%s", repo, release.TagName, sourceFormat)
+		}
+
+		if dep.Extract {
+			tmpDir := filepath.Join(pm.workDir, "tmp")
+			err := os.MkdirAll(tmpDir, 0755)
+			if err != nil {
+				return LockDependency{}, fmt.Errorf("failed to create tmp directory: %v", err)
+			}
+			actualTargetPath = filepath.Join(tmpDir, archiveName)
+		} else {
+			actualTargetPath = filepath.Join(targetPath, archiveName)
+		}
+
+		err = pm.downloadBinary(downloadURL, actualTargetPath, dep.Private)
+		if err != nil {
+			return LockDependency{}, fmt.Errorf("failed to download source code: %v", err)
+		}
+
+		if dep.Extract {
+			tmpExtractDir := filepath.Join(pm.workDir, "tmp", "extract_"+depName)
+
+			err = pm.extractArchive(actualTargetPath, tmpExtractDir)
+			if err != nil {
+				return LockDependency{}, fmt.Errorf("failed to extract source archive: %v", err)
+			}
+
+			targetDir := filepath.Join(pm.workDir, expandedPath)
+			err = os.MkdirAll(targetDir, 0755)
+			if err != nil {
+				return LockDependency{}, fmt.Errorf("failed to create target directory: %v", err)
+			}
+
+			entries, err := os.ReadDir(tmpExtractDir)
+			if err != nil {
+				return LockDependency{}, fmt.Errorf("failed to read extracted directory: %v", err)
+			}
+
+			if len(entries) == 1 && entries[0].IsDir() {
+				extractedDir := filepath.Join(tmpExtractDir, entries[0].Name())
+				err = filepath.Walk(extractedDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+
+					relPath, err := filepath.Rel(extractedDir, path)
+					if err != nil {
+						return err
+					}
+
+					if relPath == "." {
+						return nil
+					}
+
+					targetPath := filepath.Join(targetDir, relPath)
+
+					if info.IsDir() {
+						return os.MkdirAll(targetPath, info.Mode())
+					} else {
+						targetFileDir := filepath.Dir(targetPath)
+						err = os.MkdirAll(targetFileDir, 0755)
+						if err != nil {
+							return err
+						}
+						return os.Rename(path, targetPath)
+					}
+				})
+				if err != nil {
+					return LockDependency{}, fmt.Errorf("failed to move extracted files: %v", err)
+				}
+			} else {
+				for _, entry := range entries {
+					srcPath := filepath.Join(tmpExtractDir, entry.Name())
+					dstPath := filepath.Join(targetDir, entry.Name())
+					err = os.Rename(srcPath, dstPath)
+					if err != nil {
+						return LockDependency{}, fmt.Errorf("failed to move extracted file %s: %v", entry.Name(), err)
+					}
+				}
+			}
+
+			fmt.Printf("Extracted source code to directory: %s\n", targetDir)
+
+			os.RemoveAll(tmpExtractDir)
+			err = os.Remove(actualTargetPath)
+			if err != nil {
+				fmt.Printf("Warning: failed to remove archive file %s: %v\n", actualTargetPath, err)
+			}
+		}
+
+		lockDep := LockDependency{
+			Name:    depName,
+			Path:    expandedPath,
+			Source:  dep.Source,
+			Version: release.TagName,
+			Hash:    release.TagName,
+			Type:    "source",
+			Private: dep.Private,
+			Extract: dep.Extract,
+		}
+
+		fmt.Printf("✓ Installed: %s (version: %s, format: %s)\n", depName, release.TagName, sourceFormat)
+		return lockDep, nil
+
+	} else if depType == "binary" {
 		owner, repo, err := pm.extractRepoInfo(dep.Source)
 		if err != nil {
 			return LockDependency{}, fmt.Errorf("failed to parse repository URL: %v", err)
@@ -512,7 +676,6 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 		var assetID int
 		var assetName string
 
-		// First filter by asset_name if specified
 		var candidateAssets []struct {
 			ID                 int    `json:"id"`
 			Name               string `json:"name"`
@@ -534,7 +697,6 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			candidateAssets = release.Assets
 		}
 
-		// Second filter by asset_extension if specified
 		if dep.AssetExtension != "" {
 			fmt.Printf("Filtering assets by asset_extension: %s\n", dep.AssetExtension)
 			var extensionFilteredAssets []struct {
@@ -543,7 +705,6 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}
 
-			// Ensure extension starts with dot
 			extension := dep.AssetExtension
 			if !strings.HasPrefix(extension, ".") {
 				extension = "." + extension
@@ -563,7 +724,6 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			fmt.Printf("Found %d assets matching asset_extension '%s'\n", len(candidateAssets), dep.AssetExtension)
 		}
 
-		// Third filter by asset_suffix if specified
 		assetSuffix := pm.getAssetSuffixFromDep(dep)
 		if assetSuffix != "" {
 			var matchingAssets []struct {
@@ -596,7 +756,7 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			assetName = asset.Name
 			fmt.Printf("Found matching asset: %s\n", asset.Name)
 		} else {
-			// No asset_suffix specified - this should be an error now
+
 			return LockDependency{}, fmt.Errorf("asset_suffix is required for binary dependencies. Available assets: %v", func() []string {
 				var names []string
 				for _, asset := range candidateAssets {
@@ -615,7 +775,7 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			}
 			actualTargetPath = filepath.Join(tmpDir, assetName)
 		} else {
-			// targetPath is ALWAYS a directory, so append asset name
+
 			actualTargetPath = filepath.Join(targetPath, assetName)
 		}
 		if dep.Private {
@@ -730,7 +890,7 @@ func (pm *PackageManager) installDependency(depName string, dep Dependency) (Loc
 			hash = "unknown"
 		}
 
-		expandedPath := pm.expandPath(dep.Path, hash)
+		expandedPath := pm.expandPathWithOptions(dep.Path, hash, "", dep.Extract)
 		fmt.Printf("Original path: %s\n", dep.Path)
 		fmt.Printf("Expanded path: %s\n", expandedPath)
 
@@ -1085,6 +1245,23 @@ func printUsage() {
 	fmt.Println("Flags:")
 	fmt.Println("  -c <path>                                  - path to config file (default: GLITCH_DEPS.json)")
 	fmt.Println("")
+	fmt.Println("Dependency types:")
+	fmt.Println("  binary     - download binary assets from GitHub releases")
+	fmt.Println("  source     - download source code archives from GitHub releases")
+	fmt.Println("  repository - clone Git repositories")
+	fmt.Println("")
+	fmt.Println("Source type configuration:")
+	fmt.Println("  asset_extension - 'zip' or 'tar.gz' (default: 'tar.gz')")
+	fmt.Println("  extract         - extract archive contents (default: false)")
+	fmt.Println("  filename        - custom archive filename (only when extract=false)")
+	fmt.Println("  Note: asset_name and asset_suffix are not allowed for source type")
+	fmt.Println("")
+	fmt.Println("Path substitutions:")
+	fmt.Println("  @VERSION        - replaced with release tag/version")
+	fmt.Println("  @TIMESTAMP      - replaced with current unix timestamp")
+	fmt.Println("  @ASSET_EXTENSION - replaced with file extension (only when extract=false)")
+	fmt.Println("  $ENV_VAR        - replaced with environment variable value")
+	fmt.Println("")
 	fmt.Println("Environment variables:")
 	fmt.Println("  GLITCH_DEPS_GITHUB_PAT                     - GitHub Personal Access Token for private repositories")
 }
@@ -1116,10 +1293,29 @@ func (pm *PackageManager) getAssetSuffixFromDep(dep Dependency) string {
 }
 
 func (pm *PackageManager) expandPath(path, version string) string {
+	return pm.expandPathWithOptions(path, version, "", false)
+}
+
+func (pm *PackageManager) expandPathWithOptions(path, version, assetExtension string, extractMode bool) string {
 	expanded := path
 
 	if strings.Contains(expanded, "@VERSION") {
 		expanded = strings.ReplaceAll(expanded, "@VERSION", version)
+	}
+
+	if strings.Contains(expanded, "@TIMESTAMP") {
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		expanded = strings.ReplaceAll(expanded, "@TIMESTAMP", timestamp)
+	}
+
+	if strings.Contains(expanded, "@ASSET_EXTENSION") {
+		if extractMode {
+			expanded = strings.ReplaceAll(expanded, "@ASSET_EXTENSION", "")
+		} else if assetExtension != "" {
+			expanded = strings.ReplaceAll(expanded, "@ASSET_EXTENSION", assetExtension)
+		} else {
+			expanded = strings.ReplaceAll(expanded, "@ASSET_EXTENSION", "")
+		}
 	}
 
 	envVarPattern := regexp.MustCompile(`\$([A-Z_][A-Z0-9_]*)`)

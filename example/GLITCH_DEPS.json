@@ -14,5 +14,11 @@
     "asset_suffix": "aarch64-unknown-linux-gnu",
     "asset_extension": "tar.xz",
     "extract": true
+  },
+  "awg": {
+    "type": "source",
+    "path": "sources/awg",
+    "source": "https://github.com/amnezia-vpn/amneziawg-tools.git",
+    "filename": "amneziawg-tools-@VERSION.tar.gz"
   }
 }
