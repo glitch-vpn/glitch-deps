@@ -229,7 +229,7 @@ For binary dependencies, you can specify the target asset suffix using the `asse
 - **Node.js style**: `linux-x64`, `win32-x64`, `darwin-arm64`
 - **Custom formats**: `ubuntu-20.04`, `static`, `musl`, etc.
 
-If `asset_suffix` is not specified, the first available asset from the release will be downloaded.
+**⚠️ Important**: `asset_suffix` is **required** for all binary dependencies. If not specified, the installation will fail with an error listing available assets.
 
 ### Archive Extraction
 
@@ -262,7 +262,7 @@ For binary dependencies that are distributed as archives, you can enable automat
 
 **Asset Selection Logic**:
 
-The tool now uses a strict three-stage filtering process to select the correct asset:
+The tool uses a strict three-stage filtering process to select the correct asset:
 
 1. **First stage - `asset_name` filtering** (optional):
    ```json
@@ -284,7 +284,7 @@ The tool now uses a strict three-stage filtering process to select the correct a
    - Must match at the end of the filename (not anywhere in the middle)
    - If no assets match, returns an error
 
-3. **Third stage - `asset_suffix` filtering** (required):
+3. **Third stage - `asset_suffix` filtering** (required for binary):
    ```json
    {
      "asset_suffix": "linux_amd64"
@@ -329,6 +329,7 @@ When `extract` is set to `true`, the behavior depends on the `filename` field:
    ```
    - All files from the archive are extracted to the `path` directory
    - Directory structure is preserved
+   - Works with any number of files in the archive
 
 2. **With `filename` field** - Extract single file with specific name:
    ```json
@@ -338,15 +339,17 @@ When `extract` is set to `true`, the behavior depends on the `filename` field:
      "filename": "my-tool"
    }
    ```
-   - Archive **must contain exactly 1 file**
+   - Archive **must contain exactly 1 file** (excluding directories)
    - The single file is extracted and renamed to `filename`
    - Final path becomes `path/filename` (e.g., `bin/my-tool`)
+   - If archive contains 0 files → **Error: "no files found in archive"**
+   - If archive contains 2+ files → **Error: "filename specified but archive contains X files (expected 1). Remove filename to extract all files to directory"**
 
 **Error Handling**:
-- If `filename` is specified but archive contains multiple files → **Error with helpful message**
-- If `filename` is specified but archive is empty → **Error**
+- If `filename` is specified but archive contains multiple files → **Error with count and helpful message**
+- If `filename` is specified but archive contains no files → **Error**
 - If `filename` is not specified → Extract all files regardless of count
-- If no `asset_suffix` is specified → **Error** (no random asset downloads)
+- If no `asset_suffix` is specified for binary type → **Error** (no random asset downloads)
 - If multiple assets match the criteria → **Error with list of matching assets**
 - If no assets match `asset_name`, `asset_extension`, or `asset_suffix` → **Error with available options**
 
@@ -472,7 +475,7 @@ glitch_deps help
 
 ## How It Works
 
-- **Binary dependencies**: Downloads assets from GitHub releases. If `asset_suffix` is specified, searches for matching assets; otherwise downloads the first available asset
+- **Binary dependencies**: Downloads assets from GitHub releases. `asset_suffix` is **required** - if not specified, installation fails with error listing available assets
 - **Source dependencies**: Downloads GitHub's automatically generated source code archives (ZIP/TAR.GZ) for any release
 - **Repository dependencies**: Clones or pulls the latest changes from Git repositories  
 - **Archive extraction**: Supports `.tar.gz`, `.tar.xz`, and `.zip` formats with intelligent single-file vs multi-file handling
