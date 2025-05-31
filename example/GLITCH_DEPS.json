@@ -1,8 +1,8 @@
 {
-  "glitch_deps": {
-    "name": "glitch_deps",
+  "fracture": {
+    "name": "fracture",
     "path": "bin",
-    "source": "https://github.com/glitch-vpn/glitch-deps.git",
+    "source": "https://github.com/glitch-vpn/fracture.git",
     "type": "binary",
     "asset_suffix": "linux_amd64",
     "extract": true

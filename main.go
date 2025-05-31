@@ -60,8 +60,8 @@ type DepsFile map[string]Dependency
 type LockFile map[string]LockDependency
 
 const (
-	DepsFileName = "GLITCH_DEPS.json"
-	LockFileName = "GLITCH_DEPS-lock.json"
+	DepsFileName = "fracture.json"
+	LockFileName = "fracture-lock.json"
 )
 
 type PackageManager struct {
@@ -76,7 +76,7 @@ func NewPackageManager(configPath string) *PackageManager {
 	if err != nil {
 		log.Fatal("Failed to get working directory:", err)
 	}
-	githubToken := os.Getenv("GLITCH_DEPS_GITHUB_PAT")
+	githubToken := os.Getenv("FRACTURE_GITHUB_PAT")
 	if configPath == "" {
 		configPath = DepsFileName
 	}
@@ -152,7 +152,7 @@ func (pm *PackageManager) createAuthenticatedRequest(method, url string) (*http.
 func (pm *PackageManager) getLatestRelease(owner, repo string, isPrivate bool) (*GitHubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 	if isPrivate && pm.githubToken == "" {
-		return nil, fmt.Errorf("private repository %s/%s requires GLITCH_DEPS_GITHUB_PAT", owner, repo)
+		return nil, fmt.Errorf("private repository %s/%s requires FRACTURE_GITHUB_PAT", owner, repo)
 	}
 
 	req, err := pm.createAuthenticatedRequest("GET", url)
@@ -236,7 +236,7 @@ func (pm *PackageManager) downloadBinary(url, targetPath string, isPrivate bool)
 
 	if isPrivate {
 		if pm.githubToken == "" {
-			return fmt.Errorf("private repository requires GLITCH_DEPS_GITHUB_PAT")
+			return fmt.Errorf("private repository requires FRACTURE_GITHUB_PAT")
 		}
 
 		req, err := pm.createAuthenticatedRequest("GET", url)
@@ -443,7 +443,7 @@ func (pm *PackageManager) getLatestCommitHash(source string, isPrivate bool) (st
 	output, err := cmd.Output()
 	if err != nil {
 		if isPrivate && pm.githubToken == "" {
-			return "", fmt.Errorf("private repository requires GLITCH_DEPS_GITHUB_PAT")
+			return "", fmt.Errorf("private repository requires FRACTURE_GITHUB_PAT")
 		}
 		return "", fmt.Errorf("failed to get latest commit for %s: %v", source, err)
 	}
@@ -952,7 +952,7 @@ func (pm *PackageManager) Install() error {
 	}
 
 	if hasUpdates {
-		fmt.Println("📋 Updates available! Run 'glitch_deps update' to update.")
+		fmt.Println("📋 Updates available! Run 'fracture update' to update.")
 	}
 
 	fmt.Println("✅ Installation completed!")
@@ -1005,10 +1005,10 @@ func (pm *PackageManager) Update(dependencyName, version string) error {
 	return nil
 }
 func (pm *PackageManager) SelfUpdate() error {
-	fmt.Println("🔄 Checking for glitch_deps updates...")
+	fmt.Println("🔄 Checking for fracture updates...")
 
 	const repoOwner = "glitch-vpn"
-	const repoName = "glitch-deps"
+	const repoName = "fracture"
 	release, err := pm.getLatestRelease(repoOwner, repoName, false)
 	if err != nil {
 		return fmt.Errorf("failed to get latest release: %v", err)
@@ -1073,7 +1073,7 @@ func (pm *PackageManager) SelfUpdate() error {
 
 		for _, file := range files {
 			if info, err := os.Stat(file); err == nil && !info.IsDir() {
-				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "glitch_deps") {
+				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "fracture") {
 					newBinaryPath = file
 					break
 				}
@@ -1097,7 +1097,7 @@ func (pm *PackageManager) SelfUpdate() error {
 
 		for _, file := range files {
 			if info, err := os.Stat(file); err == nil && !info.IsDir() {
-				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "glitch_deps") {
+				if info.Mode()&0111 != 0 || strings.Contains(filepath.Base(file), "fracture") {
 					newBinaryPath = file
 					break
 				}
@@ -1232,18 +1232,18 @@ func (pm *PackageManager) findBestAssetMatch(assets []struct {
 	return nil
 }
 func printUsage() {
-	fmt.Println("Glitch Dependencies Manager")
+	fmt.Println("Fracture. Dependencies Manager")
 	fmt.Println("Usage:")
-	fmt.Println("  glitch_deps install [-c config.json]       - install dependencies")
-	fmt.Println("  glitch_deps update [-c config.json]        - update all dependencies")
-	fmt.Println("  glitch_deps update <dependency> [-c config.json] - update specific dependency")
-	fmt.Println("  glitch_deps update <dependency> <version> [-c config.json] - update to specific version")
-	fmt.Println("  glitch_deps self-update                    - update glitch_deps to latest version")
-	fmt.Println("  glitch_deps version                        - show version information")
-	fmt.Println("  glitch_deps help                           - show this help")
+	fmt.Println("  fracture install [-c config.json]       - install dependencies")
+	fmt.Println("  fracture update [-c config.json]        - update all dependencies")
+	fmt.Println("  fracture update <dependency> [-c config.json] - update specific dependency")
+	fmt.Println("  fracture update <dependency> <version> [-c config.json] - update to specific version")
+	fmt.Println("  fracture self-update                    - update fracture to latest version")
+	fmt.Println("  fracture version                        - show version information")
+	fmt.Println("  fracture help                           - show this help")
 	fmt.Println("")
 	fmt.Println("Flags:")
-	fmt.Println("  -c <path>                                  - path to config file (default: GLITCH_DEPS.json)")
+	fmt.Println("  -c <path>                                  - path to config file (default: fracture.json)")
 	fmt.Println("")
 	fmt.Println("Dependency types:")
 	fmt.Println("  binary     - download binary assets from GitHub releases")
@@ -1263,10 +1263,10 @@ func printUsage() {
 	fmt.Println("  $ENV_VAR        - replaced with environment variable value")
 	fmt.Println("")
 	fmt.Println("Environment variables:")
-	fmt.Println("  GLITCH_DEPS_GITHUB_PAT                     - GitHub Personal Access Token for private repositories")
+	fmt.Println("  FRACTURE_GITHUB_PAT                     - GitHub Personal Access Token for private repositories")
 }
 func printVersion() {
-	fmt.Printf("glitch_deps version %s\n", Version)
+	fmt.Printf("fracture version %s\n", Version)
 	fmt.Printf("Git commit: %s\n", GitCommit)
 	fmt.Printf("Build date: %s\n", BuildDate)
 	fmt.Printf("Go version: %s\n", runtime.Version())

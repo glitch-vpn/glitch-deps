@@ -7,10 +7,10 @@
     "hash": "v1.0.20241018",
     "type": "source"
   },
-  "glitch_deps": {
-    "name": "glitch_deps",
+  "fracture": {
+    "name": "fracture",
     "path": "bin",
-    "source": "https://github.com/glitch-vpn/glitch-deps.git",
+    "source": "https://github.com/glitch-vpn/fracture.git",
     "version": "v0.1.9",
     "hash": "v0.1.9",
     "type": "binary",

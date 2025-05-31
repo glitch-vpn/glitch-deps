@@ -1,4 +1,4 @@
-# Glitch Dependencies Manager
+# Fracture. Dependencies Manager
 
 A lightweight package manager for managing Git repository dependencies and GitHub release binaries.
 
@@ -24,15 +24,15 @@ A lightweight package manager for managing Git repository dependencies and GitHu
 
 ## Installation
 
-Download the latest release from [GitHub Releases](https://github.com/glitch-vpn/glitch-deps/releases) or build from source:
+Download the latest release from [GitHub Releases](https://github.com/glitch-vpn/fracture/releases) or build from source:
 
 ```bash
-go build -o glitch_deps main.go
+go build -o fracture main.go
 ```
 
 ## Quick Start
 
-1. Create a `GLITCH_DEPS.json` file in your project root:
+1. Create a `fracture.json` file in your project root:
 
 ```json
 {
@@ -67,7 +67,7 @@ go build -o glitch_deps main.go
 2. Install dependencies:
 
 ```bash
-./glitch_deps install
+./fracture install
 ```
 
 ## Configuration
@@ -121,7 +121,7 @@ export DEPLOYMENT_ENV=production
 export PROJECT_NAME=myapp
 
 # Install dependencies - paths will be expanded automatically
-./glitch_deps install
+./fracture install
 
 # Results in paths like:
 # bin/ss/v1.15.3/production/
@@ -143,17 +143,17 @@ You can specify a custom configuration file using the `-c` flag:
 
 ```bash
 # Use custom config file
-./glitch_deps install -c my_deps.json
-./glitch_deps update -c production_deps.json
+./fracture install -c my_deps.json
+./fracture update -c production_deps.json
 
 # Different configs for different environments
-./glitch_deps install -c dev_deps.json      # Development dependencies
-./glitch_deps install -c prod_deps.json     # Production dependencies
-./glitch_deps install -c test_deps.json     # Test dependencies
+./fracture install -c dev_deps.json      # Development dependencies
+./fracture install -c prod_deps.json     # Production dependencies
+./fracture install -c test_deps.json     # Test dependencies
 ```
 
 **Lock Files**: Each config file automatically gets its own lock file:
-- `GLITCH_DEPS.json` → `GLITCH_DEPS-lock.json`
+- `fracture.json` → `fracture-lock.json`
 - `my_deps.json` → `my_deps-lock.json`
 - `production_deps.json` → `production_deps-lock.json`
 
@@ -387,10 +387,10 @@ If `extract` is not specified or set to `false`, the file is downloaded as-is wi
 
 ### Private Repositories
 
-Set the `GLITCH_DEPS_GITHUB_PAT` environment variable with your GitHub Personal Access Token:
+Set the `FRACTURE_GITHUB_PAT` environment variable with your GitHub Personal Access Token:
 
 ```bash
-export GLITCH_DEPS_GITHUB_PAT=ghp_xxxxxxxxxxxxxxxxxxxx
+export FRACTURE_GITHUB_PAT=ghp_xxxxxxxxxxxxxxxxxxxx
 ```
 
 Mark private dependencies in your config:
@@ -418,31 +418,31 @@ Mark private dependencies in your config:
 
 ```bash
 # Install all dependencies (default config)
-glitch_deps install
+fracture install
 
 # Install with custom config
-glitch_deps install -c my_deps.json
+fracture install -c my_deps.json
 
 # Update all dependencies  
-glitch_deps update
+fracture update
 
 # Update with custom config
-glitch_deps update -c production_deps.json
+fracture update -c production_deps.json
 
 # Update specific dependency
-glitch_deps update my_provider
+fracture update my_provider
 
 # Update specific dependency with custom config
-glitch_deps update my_provider -c dev_deps.json
+fracture update my_provider -c dev_deps.json
 
 # Update to specific version
-glitch_deps update my_provider v1.2.0
+fracture update my_provider v1.2.0
 
-# Update glitch_deps itself
-glitch_deps self-update
+# Update fracture itself
+fracture self-update
 
 # Show help
-glitch_deps help
+fracture help
 ```
 
 ## Use Cases
@@ -451,26 +451,26 @@ glitch_deps help
 
 ```bash
 # Development environment
-./glitch_deps install -c dev_deps.json
+./fracture install -c dev_deps.json
 
 # Production environment  
-./glitch_deps install -c prod_deps.json
+./fracture install -c prod_deps.json
 
 # CI/CD environment
-./glitch_deps install -c ci_deps.json
+./fracture install -c ci_deps.json
 ```
 
 ### Project-Specific Dependencies
 
 ```bash
 # Frontend project dependencies
-./glitch_deps install -c frontend_deps.json
+./fracture install -c frontend_deps.json
 
 # Backend project dependencies
-./glitch_deps install -c backend_deps.json
+./fracture install -c backend_deps.json
 
 # Infrastructure tools
-./glitch_deps install -c infra_deps.json
+./fracture install -c infra_deps.json
 ```
 
 ## How It Works

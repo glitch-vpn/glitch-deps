@@ -1,4 +1,3 @@
 tmp/
-go.sum
-./GLITCH_DEPS-lock.json
-./GLITCH_DEPS.json
+./fracture-lock.json
+./fracture.json

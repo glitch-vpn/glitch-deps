@@ -1,4 +1,4 @@
-module glitch_deps
+module github.com/glitch-vpn/fracture
 
 go 1.21
 

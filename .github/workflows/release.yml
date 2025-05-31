@@ -37,7 +37,7 @@ jobs:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
       run: |
-        BINARY_NAME=glitch_deps
+        BINARY_NAME=fracture
         if [ "$GOOS" = "windows" ]; then
           BINARY_NAME="${BINARY_NAME}.exe"
         fi
@@ -53,16 +53,16 @@ jobs:
         go build -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildDate=${BUILD_DATE}" -o ${BINARY_NAME} main.go
         
         if [ "$GOOS" = "windows" ]; then
-          zip glitch_deps_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.zip ${BINARY_NAME}
+          zip fracture_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.zip ${BINARY_NAME}
         else
-          tar -czf glitch_deps_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.tar.gz ${BINARY_NAME}
+          tar -czf fracture_${{ steps.version.outputs.VERSION }}_${GOOS}_${GOARCH}.tar.gz ${BINARY_NAME}
         fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: glitch_deps_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}
-        path: glitch_deps_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.*
+        name: fracture_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}
+        path: fracture_${{ steps.version.outputs.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.*
 
   release:
     needs: build
@@ -79,7 +79,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          */glitch_deps_${{ steps.version.outputs.VERSION }}_*
+          */fracture_${{ steps.version.outputs.VERSION }}_*
         generate_release_notes: true
         draft: false
         prerelease: false
